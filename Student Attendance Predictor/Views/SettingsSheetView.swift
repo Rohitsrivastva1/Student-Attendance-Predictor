@@ -47,14 +47,19 @@ struct SettingsSheetView: View {
                     }
                 }
 
-                Section("Privacy") {
+                Section("Privacy & Support") {
                     NavigationLink("Privacy Policy") {
                         PrivacyPolicyView()
                     }
 
-                    Text("Publish this same policy on a public URL and use that link in your App Store listing.")
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
-                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Support")
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        Text("info@schoolabe.com")
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
                 }
             }
             .navigationTitle("Settings")
@@ -112,19 +117,19 @@ struct PrivacyPolicyView: View {
             VStack(alignment: .leading, spacing: 16) {
                 policySection(
                     title: "Overview",
-                    body: "Student Attendance Predictor stores your latest attendance inputs and default attendance target on your device so the app can restore them later."
+                    body: "Student Attendance Predictor stores your latest attendance inputs and your default attendance target locally on your device using Apple UserDefaults so the app can restore them the next time you open it."
                 )
                 policySection(
-                    title: "Data Collection",
-                    body: "The current build does not require account creation and does not send attendance data to a backend server."
+                    title: "Data Handling",
+                    body: "The app does not require an account, and it does not transmit your attendance inputs to the developer or to a remote server."
                 )
                 policySection(
-                    title: "Advertising",
-                    body: "If AdMob is enabled in a release build, ad providers may use device-level advertising identifiers according to their own policies."
+                    title: "Sharing and Tracking",
+                    body: "The current app build does not include third-party advertising SDKs, analytics SDKs, or cross-app tracking."
                 )
                 policySection(
-                    title: "Contact",
-                    body: "Add your support email or website before release, then publish this policy on a public webpage for App Store submission."
+                    title: "Support and Privacy Contact",
+                    body: "For support questions or privacy requests, contact info@schoolabe.com."
                 )
             }
             .padding(20)

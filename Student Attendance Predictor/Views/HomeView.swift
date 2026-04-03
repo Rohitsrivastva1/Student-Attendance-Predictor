@@ -17,7 +17,6 @@ struct HomeView: View {
                     headerSection
                     inputSection
                     resultSection
-                    adPlaceholder
                 }
                 .padding(.horizontal, 18)
                 .padding(.vertical, 20)
@@ -165,42 +164,6 @@ struct HomeView: View {
                     .padding()
             }
             .shadow(color: Color.black.opacity(0.08), radius: 14, x: 0, y: 5)
-    }
-
-    private var adPlaceholder: some View {
-        HStack(spacing: 10) {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.blue.opacity(0.12))
-                .frame(width: 40, height: 40)
-                .overlay {
-                    Text("Ad")
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
-                        .foregroundStyle(.blue)
-                }
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Sponsored banner")
-                    .font(.system(size: 15, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.primary)
-
-                Text("AdMob banner will appear here")
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(.white)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(Color.black.opacity(0.05), lineWidth: 1)
-                }
-                .shadow(color: Color.black.opacity(0.04), radius: 10, x: 0, y: 4)
-        )
     }
 
     private func heroCard(for result: AttendanceResult) -> some View {
