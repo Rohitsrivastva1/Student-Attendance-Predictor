@@ -9,6 +9,7 @@ struct SettingsSheetView: View {
     @ObservedObject var viewModel: AttendanceViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var defaultRequiredPercentage: String
+    @AppStorage("feature.notificationsEnabled") private var notificationsEnabled = true
 
     init(viewModel: AttendanceViewModel) {
         self.viewModel = viewModel
@@ -45,6 +46,15 @@ struct SettingsSheetView: View {
                         viewModel.resetInputs()
                         dismiss()
                     }
+                }
+
+                Section("Automation") {
+                    Toggle("Risk Notifications", isOn: $notificationsEnabled)
+                    // v0.2 (hidden for this release): Upgrade to Pro control
+                    // Toggle("Pro Gating Enabled", isOn: $proGatingEnabled)
+                    Text("Risk notifications are local alerts; no backend is used.")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("Privacy & Support") {

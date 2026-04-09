@@ -4,24 +4,46 @@
 //
 
 import SwiftUI
+#if canImport(StoreKit)
+import StoreKit
+#endif
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct HomeView: View {
-    @StateObject private var viewModel = AttendanceViewModel()
+    @ObservedObject var viewModel: AttendanceViewModel
+    @ObservedObject var subjectStore: SubjectStore
     @State private var selectedScenario: ScenarioAction = .current
     @State private var isShowingSettings = false
+    @State private var isShowingSubjects = false
+    @State private var isAnimating = false
+    @State private var shareItems: [Any] = []
+    @State private var isShowingShareSheet = false
+    @State private var isBreakdownExpanded = false
+    @State private var customAttendCount = 0
+    @State private var customMissCount = 0
+    @State private var forecastWeeks = 1
+    @State private var forecastHolidayClasses = 0
+    @State private var forecastExpectedAbsences = 0
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 18) {
-                    headerSection
-                    inputSection
-                    resultSection
+            ZStack {
+                // Animated Dark Premium Background
+                animatedBackground
+                
+                ScrollView {
+                    VStack(spacing: 24) {
+                        headerSection
+                        inputSection
+                        resultSection
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 24)
                 }
-                .padding(.horizontal, 18)
-                .padding(.vertical, 20)
             }
-            .background(screenBackgroundColor)
+            .preferredColorScheme(.dark)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.hidden, for: .navigationBar)
             .onChange(of: viewModel.totalClassesInput) { _, _ in
@@ -33,78 +55,226 @@ struct HomeView: View {
             .onChange(of: viewModel.requiredPercentageInput) { _, _ in
                 selectedScenario = .current
             }
+            .onAppear {
+                isAnimating = true
+            }
+            .onChange(of: viewModel.reviewRequestToken) { _, _ in
+                requestAppReview()
+            }
+            .sheet(isPresented: $isShowingShareSheet) {
+                ActivityView(activityItems: shareItems)
+            }
+            .sheet(isPresented: $isShowingSubjects) {
+                SubjectListView(subjectStore: subjectStore)
+                    .preferredColorScheme(.dark)
+            }
+        }
+    }
+    
+    private var animatedBackground: some View {
+        ZStack {
+            Color(red: 0.05, green: 0.06, blue: 0.1).ignoresSafeArea()
+            
+            // Floating orbs
+            Circle()
+                .fill(Color(red: 0.1, green: 0.5, blue: 0.9).opacity(0.15))
+                .blur(radius: 60)
+                .frame(width: 300, height: 300)
+                .offset(y: -150)
+                .rotationEffect(.degrees(isAnimating ? 360 : 0))
+                .animation(.linear(duration: 15.0).repeatForever(autoreverses: false), value: isAnimating)
+            
+            Circle()
+                .fill(Color(red: 0.8, green: 0.2, blue: 0.6).opacity(0.12))
+                .blur(radius: 80)
+                .frame(width: 400, height: 400)
+                .offset(y: 150)
+                .rotationEffect(.degrees(isAnimating ? -360 : 0))
+                .animation(.linear(duration: 20.0).repeatForever(autoreverses: false), value: isAnimating)
         }
     }
 
     private var headerSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 6) {
                     Text("Attendance Predictor")
-                        .font(.system(size: 32, weight: .bold, design: .rounded))
+                        .font(.system(size: 32, weight: .black, design: .rounded))
+                        .foregroundStyle(
+                            LinearGradient(colors: [.white, .white.opacity(0.7)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                        )
+                        .shadow(color: .white.opacity(0.3), radius: 10, x: 0, y: 0)
 
-                    Text("Input Data")
-                        .font(.system(size: 20, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.primary.opacity(0.82))
+                    Text("Live Intelligence")
+                        .font(.system(size: 16, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color(red: 0.3, green: 0.8, blue: 1.0))
+                        .textCase(.uppercase)
+
+                    Text("Don't guess your attendance — predict it.")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.65))
+
+                    Text(subjectStore.selectedSubjectName)
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.7))
                 }
 
                 Spacer()
 
                 Button {
                     triggerLightHaptic()
+                    isShowingSubjects = true
+                } label: {
+                    Image(systemName: "books.vertical.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(12)
+                        .background(
+                            Circle()
+                                .fill(.ultraThinMaterial)
+                                .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 1))
+                        )
+                        .shadow(color: Color.black.opacity(0.3), radius: 8, x: 0, y: 4)
+                }
+                .buttonStyle(PressableButtonStyle())
+
+                Button {
+                    triggerLightHaptic()
                     isShowingSettings = true
                 } label: {
-                    Image(systemName: "gearshape.fill")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(.blue)
-                        .padding(10)
-                        .background(Circle().fill(.white))
-                        .shadow(color: Color.black.opacity(0.06), radius: 8, x: 0, y: 3)
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(12)
+                        .background(
+                            Circle()
+                                .fill(.ultraThinMaterial)
+                                .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 1))
+                        )
+                        .shadow(color: Color.black.opacity(0.3), radius: 8, x: 0, y: 4)
                 }
                 .buttonStyle(PressableButtonStyle())
             }
         }
         .sheet(isPresented: $isShowingSettings) {
             SettingsSheetView(viewModel: viewModel)
+                .preferredColorScheme(.dark)
         }
     }
 
     private var inputSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            inputField(title: "Total Classes Hosted", text: $viewModel.totalClassesInput, keyboardType: .numberPad)
-            inputField(title: "Classes Attended", text: $viewModel.attendedClassesInput, keyboardType: .numberPad)
-            inputField(title: "Required Minimum (%)", text: $viewModel.requiredPercentageInput, keyboardType: .decimalPad)
+        VStack(alignment: .leading, spacing: 18) {
+            inputField(title: "TOTAL CLASSES HOSTED", text: $viewModel.totalClassesInput, keyboardType: .numberPad)
+            inputField(title: "CLASSES ATTENDED", text: $viewModel.attendedClassesInput, keyboardType: .numberPad)
+            inputField(title: "REQUIRED MINIMUM (%)", text: $viewModel.requiredPercentageInput, keyboardType: .decimalPad)
+            requiredPresetsRow
+            clearInputsButton
 
             validationBanner
         }
-        .padding(14)
+        .padding(20)
         .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(.white)
-                .shadow(color: Color.black.opacity(0.08), radius: 16, x: 0, y: 6)
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .stroke(Color.white.opacity(0.15), lineWidth: 1)
+                )
+                .shadow(color: Color.black.opacity(0.4), radius: 20, x: 0, y: 10)
         )
+    }
+
+    private var requiredPresetsRow: some View {
+        HStack(spacing: 10) {
+            Text("Quick presets")
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.6))
+                .padding(.trailing, 4)
+
+            ForEach([75, 80, 85], id: \.self) { preset in
+                let isSelected = Int(viewModel.requiredPercentage.rounded()) == preset
+
+                Button {
+                    triggerLightHaptic()
+                    viewModel.applyRequiredPercentagePreset(Double(preset))
+                } label: {
+                    Text("\(preset)%")
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(isSelected ? Color.black : Color.white.opacity(0.9))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(isSelected ? Color.white : Color.white.opacity(0.12))
+                                .overlay(
+                                    Capsule(style: .continuous)
+                                        .stroke(Color.white.opacity(isSelected ? 0 : 0.2), lineWidth: 1)
+                                )
+                        )
+                }
+                .buttonStyle(PressableButtonStyle())
+            }
+
+            Spacer()
+        }
+    }
+
+    private var clearInputsButton: some View {
+        HStack {
+            Spacer()
+            Button(role: .destructive) {
+                triggerLightHaptic()
+                viewModel.resetInputs()
+                selectedScenario = .current
+            } label: {
+                Label("Clear all", systemImage: "trash")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.9))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(Color.red.opacity(0.2))
+                            .overlay(
+                                Capsule(style: .continuous)
+                                    .stroke(Color.red.opacity(0.35), lineWidth: 1)
+                            )
+                    )
+            }
+            .buttonStyle(PressableButtonStyle())
+        }
     }
 
     private var resultSection: some View {
         Group {
             if let result = displayResult {
-                VStack(spacing: 16) {
+                VStack(spacing: 24) {
                     heroCard(for: result)
+                    riskAlertsCard(for: result)
                     scenarioSection(baseResult: viewModel.result, displayedResult: result)
+                    // v0.2 (hidden for this release): What-If Simulator UI
+                    // whatIfWorkbenchCard
+                    trendGraphCard
+                    nextClassImpactCard
+                    subjectForecastCard
+                    facultyDashboardCard
+                    // v0.2 (hidden for this release): Calculation module UI
+                    // calculationBreakdownCard(for: result)
 
-                    HStack(alignment: .top, spacing: 10) {
-                        progressCard(for: result)
+                    HStack(alignment: .top, spacing: 16) {
+                        // v0.2 (hidden for this release): Calculation module UI
+                        // progressCard(for: result)
                         ResultCardView(
                             title: result.status == .safe ? "Best next move" : "Recovery plan",
                             value: actionSummary(for: result),
                             subtitle: planSubtitle(for: result),
-                            tint: result.status == .safe ? .green : .orange,
+                            tint: result.status == .safe ? Color(red: 0.2, green: 0.9, blue: 0.5) : Color(red: 1.0, green: 0.3, blue: 0.3),
                             alignment: .center,
                             isEmphasized: true
                         )
                     }
                 }
-                .animation(.spring(response: 0.35, dampingFraction: 0.82), value: selectedScenario)
+                .animation(.spring(response: 0.4, dampingFraction: 0.8), value: selectedScenario)
             } else {
                 placeholderSection
             }
@@ -112,24 +282,30 @@ struct HomeView: View {
     }
 
     private func inputField(title: String, text: Binding<String>, keyboardType: KeyboardType) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.system(size: 13, weight: .medium, design: .rounded))
-                .foregroundStyle(.primary.opacity(0.82))
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.5))
+                .tracking(1.2)
 
-            HStack(spacing: 10) {
+            HStack(spacing: 12) {
                 stepperButton(symbol: "minus", text: text, keyboardType: keyboardType, delta: -1)
 
-                TextField(title, text: text)
+                TextField("0", text: text)
                     .applyKeyboardType(keyboardType)
-                    .font(.system(size: 18, weight: .medium, design: .rounded))
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
                     .multilineTextAlignment(.center)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 11)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 14)
                     .frame(maxWidth: .infinity)
                     .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(fieldBackgroundColor)
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Color.black.opacity(0.3))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                            )
                     )
 
                 stepperButton(symbol: "plus", text: text, keyboardType: keyboardType, delta: 1)
@@ -140,188 +316,452 @@ struct HomeView: View {
     private var validationBanner: some View {
         Group {
             if let validationMessage = viewModel.validationMessage {
-                Text(validationMessage)
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
-                    .foregroundStyle(.red)
-                    .padding(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color.red.opacity(0.08))
-                    )
+                HStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(Color(red: 1.0, green: 0.4, blue: 0.4))
+                    Text(validationMessage)
+                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.9))
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(Color(red: 1.0, green: 0.2, blue: 0.2).opacity(0.15))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .stroke(Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.3), lineWidth: 1)
+                        )
+                )
             }
         }
     }
 
     private var placeholderSection: some View {
-        RoundedRectangle(cornerRadius: 18, style: .continuous)
-            .fill(.white)
-            .frame(height: 132)
+        RoundedRectangle(cornerRadius: 24, style: .continuous)
+            .fill(.ultraThinMaterial)
+            .frame(height: 160)
             .overlay {
-                Text("Enter your class data to see live attendance guidance.")
-                    .font(.system(size: 16, weight: .medium, design: .rounded))
-                    .foregroundStyle(.secondary)
-                    .padding()
+                VStack(spacing: 12) {
+                    Image(systemName: "waveform.path.ecg")
+                        .font(.system(size: 32, weight: .light))
+                        .foregroundStyle(Color.white.opacity(0.4))
+                    Text("Awaiting data input...")
+                        .font(.system(size: 16, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.5))
+                }
             }
-            .shadow(color: Color.black.opacity(0.08), radius: 14, x: 0, y: 5)
+            .overlay(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .stroke(Color.white.opacity(0.1), style: StrokeStyle(lineWidth: 1, dash: [8, 8]))
+            )
     }
 
     private func heroCard(for result: AttendanceResult) -> some View {
         let isSafe = result.status == .safe
-        let primaryStatusColor = isSafe ? Color.green : Color(red: 0.92, green: 0.29, blue: 0.22)
-        let secondaryStatusColor = isSafe ? Color(red: 0.28, green: 0.74, blue: 0.48) : Color.orange
+        let primaryStatusColor = isSafe ? Color(red: 0.1, green: 0.8, blue: 0.4) : Color(red: 1.0, green: 0.2, blue: 0.4)
+        let secondaryStatusColor = isSafe ? Color(red: 0.0, green: 0.5, blue: 0.3) : Color(red: 0.8, green: 0.1, blue: 0.2)
 
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: isSafe ? "checkmark.shield.fill" : "exclamationmark.triangle.fill")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(.white)
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center, spacing: 10) {
+                HStack(spacing: 10) {
+                    Image(systemName: statusIconName(for: result))
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundStyle(primaryStatusColor)
+                        .shadow(color: primaryStatusColor.opacity(0.4), radius: 4, x: 0, y: 0)
 
-                Text(isSafe ? "SAFE" : "RISK")
-                    .font(.system(size: 22, weight: .black, design: .rounded))
-                    .foregroundStyle(.white)
+                    Text(statusTitle(for: result))
+                        .font(.system(size: 14, weight: .black, design: .rounded))
+                        .foregroundStyle(primaryStatusColor)
+                        .tracking(1.5)
+                }
+
+                Spacer()
+
+                Button {
+                    triggerLightHaptic()
+                    shareResult(result)
+                } label: {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(Color.white.opacity(0.12))
+                                .overlay(
+                                    Capsule(style: .continuous)
+                                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                                )
+                        )
+                }
+                .buttonStyle(PressableButtonStyle())
             }
 
             Text(heroTitle(for: result))
-                .font(.system(size: 28, weight: .bold, design: .rounded))
+                .font(.system(size: 32, weight: .black, design: .rounded))
                 .foregroundStyle(.white)
+                .shadow(color: .white.opacity(0.2), radius: 4, x: 0, y: 2)
                 .fixedSize(horizontal: false, vertical: true)
 
             Text(heroSubtitle(for: result))
-                .font(.system(size: 15, weight: .medium, design: .rounded))
-                .foregroundStyle(.white.opacity(0.96))
+                .font(.system(size: 16, weight: .medium, design: .rounded))
+                .foregroundStyle(.white.opacity(0.7))
 
-            progressBar(for: result)
+            progressBar(for: result, color: primaryStatusColor)
+                .padding(.top, 8)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
+        .padding(24)
         .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [primaryStatusColor.opacity(0.94), secondaryStatusColor.opacity(0.78)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .stroke(
+                            LinearGradient(
+                                colors: [primaryStatusColor.opacity(0.5), .clear, secondaryStatusColor.opacity(0.3)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 1.5
+                        )
                 )
         )
-        .shadow(color: primaryStatusColor.opacity(0.22), radius: 12, x: 0, y: 6)
+        .shadow(color: primaryStatusColor.opacity(0.08), radius: 20, x: 0, y: 10)
     }
 
     private func scenarioSection(baseResult: AttendanceResult?, displayedResult: AttendanceResult) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Quick simulate")
-                    .font(.system(size: 16, weight: .bold, design: .rounded))
-                    .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("SCENARIO SIMULATOR")
+                    .font(.system(size: 12, weight: .black, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.5))
+                    .tracking(1.2)
 
-                Text("Try different scenarios instantly")
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
-                    .foregroundStyle(.secondary)
+                Text("Forecast your future standing")
+                    .font(.system(size: 14, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.8))
             }
 
-            HStack(spacing: 10) {
+            HStack(spacing: 12) {
                 ForEach(ScenarioAction.allCases) { scenario in
                     Button {
                         triggerLightHaptic()
                         selectedScenario = scenario
                     } label: {
                         let isSelected = selectedScenario == scenario
+                        let accentColor = Color(red: 0.3, green: 0.7, blue: 1.0)
 
                         Text(scenario.label)
-                            .font(.system(size: 14, weight: .semibold, design: .rounded))
-                            .foregroundStyle(isSelected ? .white : .blue)
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
+                            .foregroundStyle(isSelected ? .white : .white.opacity(0.6))
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
+                            .padding(.vertical, 14)
                             .background(
-                                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .fill(isSelected ? Color.blue : .white)
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .fill(isSelected ? accentColor.opacity(0.2) : Color.black.opacity(0.2))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                            .stroke(isSelected ? accentColor : Color.white.opacity(0.1), lineWidth: isSelected ? 1.5 : 1)
+                                    )
                             )
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .stroke(Color.blue.opacity(isSelected ? 0 : 0.22), lineWidth: 1)
-                            }
-                            .scaleEffect(isSelected ? 1.02 : 1.0)
-                            .shadow(color: isSelected ? Color.blue.opacity(0.18) : Color.black.opacity(0.04), radius: isSelected ? 10 : 4, x: 0, y: isSelected ? 5 : 2)
-                            .animation(.spring(response: 0.22, dampingFraction: 0.75), value: isSelected)
+                            .shadow(color: isSelected ? accentColor.opacity(0.3) : .clear, radius: 10, x: 0, y: 4)
+                            .scaleEffect(isSelected ? 1.03 : 1.0)
                     }
                     .buttonStyle(PressableButtonStyle())
                 }
             }
 
             Text(scenarioInsight(baseResult: baseResult, displayedResult: displayedResult))
-                .font(.system(size: 14, weight: .medium, design: .rounded))
-                .foregroundStyle(.secondary)
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color(red: 0.9, green: 0.9, blue: 1.0).opacity(0.7))
+                .padding(.top, 4)
         }
+    }
+
+    private func riskAlertsCard(for result: AttendanceResult) -> some View {
+        let riskLevel = CalculationService.riskLevel(
+            attended: viewModel.attendedClasses,
+            total: viewModel.totalClasses,
+            required: viewModel.requiredPercentage
+        )
+
+        let message: String = {
+            switch riskLevel {
+            case .stable:
+                return "Early risk check: Stable. You have healthy bunk buffer."
+            case .warning:
+                return "Early risk warning: You are close to threshold. Avoid unnecessary absences."
+            case .critical:
+                return "Critical risk: falling below target. Prioritize attendance recovery now."
+            }
+        }()
+
+        let color: Color = {
+            switch riskLevel {
+            case .stable:
+                return Color(red: 0.2, green: 0.9, blue: 0.5)
+            case .warning:
+                return .orange
+            case .critical:
+                return .red
+            }
+        }()
+
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("RISK ALERTS")
+                .font(.system(size: 12, weight: .black, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.55))
+                .tracking(1.1)
+
+            Text(message)
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.88))
+
+            if result.status == .safe {
+                Text("Safe bunk buffer now: \(result.bunkAllowed)")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(color)
+            } else {
+                Text("Recovery needed now: attend next \(result.recoveryNeeded) classes.")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(color)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(color.opacity(0.4), lineWidth: 1)
+                )
+        )
+    }
+
+    private var whatIfWorkbenchCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("WHAT-IF SIMULATOR")
+                .font(.system(size: 12, weight: .black, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.55))
+                .tracking(1.1)
+
+            HStack {
+                Stepper("Miss next \(customMissCount)", value: $customMissCount, in: 0...20)
+                Spacer()
+                Stepper("Attend next \(customAttendCount)", value: $customAttendCount, in: 0...20)
+            }
+            .font(.system(size: 13, weight: .semibold, design: .rounded))
+            .foregroundStyle(.white.opacity(0.9))
+
+            if let customResult = viewModel.simulatedResult(attendMore: customAttendCount, skipMore: customMissCount) {
+                Text("Projected attendance: \(String(format: "%.1f%%", customResult.currentPercentage))")
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .foregroundStyle(customResult.status == .safe ? Color.green : Color.orange)
+
+                Text(customResult.status == .safe
+                     ? "You can still miss \(customResult.bunkAllowed) more classes safely."
+                     : "You would need \(customResult.recoveryNeeded) consecutive attended classes to recover.")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.8))
+            } else {
+                Text("Enter attendance values to run what-if simulations.")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.8))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                )
+        )
+    }
+
+    private var subjectForecastCard: some View {
+        let forecasts = subjectStore.subjectForecasts(
+            weeks: forecastWeeks,
+            holidayClassCount: forecastHolidayClasses,
+            expectedAbsences: forecastExpectedAbsences
+        )
+
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("SUBJECT-WISE FORECAST")
+                .font(.system(size: 12, weight: .black, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.55))
+                .tracking(1.1)
+
+            HStack {
+                Stepper("Weeks: \(forecastWeeks)", value: $forecastWeeks, in: 1...8)
+                Spacer()
+                Stepper("Holiday classes: \(forecastHolidayClasses)", value: $forecastHolidayClasses, in: 0...30)
+            }
+            .font(.system(size: 12, weight: .semibold, design: .rounded))
+            .foregroundStyle(.white.opacity(0.9))
+
+            Stepper("Expected absences: \(forecastExpectedAbsences)", value: $forecastExpectedAbsences, in: 0...30)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.9))
+
+            if forecasts.isEmpty {
+                Text("No subjects to forecast yet.")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.8))
+            } else {
+                ForEach(forecasts) { item in
+                    HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(item.subjectName)
+                                .font(.system(size: 13, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white)
+                            Text("Current \(String(format: "%.1f%%", item.currentPercentage)) → Forecast \(String(format: "%.1f%%", item.forecastedPercentage))")
+                                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.7))
+                        }
+                        Spacer()
+                        Text(item.riskLevel.rawValue)
+                            .font(.system(size: 11, weight: .black, design: .rounded))
+                            .foregroundStyle(colorForRiskLevel(item.riskLevel))
+                    }
+                    .padding(.vertical, 6)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                )
+        )
+    }
+
+    private var facultyDashboardCard: some View {
+        let summary = subjectStore.dashboardSummary
+
+        return VStack(alignment: .leading, spacing: 10) {
+            Text("FACULTY / ADMIN DASHBOARD")
+                .font(.system(size: 12, weight: .black, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.55))
+                .tracking(1.1)
+
+            HStack(spacing: 10) {
+                trendChip(title: "Subjects", value: "\(summary.totalSubjects)")
+                trendChip(title: "At Risk", value: "\(summary.riskSubjects)")
+                trendChip(title: "Safe", value: "\(summary.safeSubjects)")
+            }
+
+            Text("Average attendance: \(String(format: "%.1f%%", summary.averageAttendance))")
+                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.9))
+
+            if let atRisk = summary.mostAtRiskSubject {
+                Text("Most at risk: \(atRisk.name) (\(String(format: "%.1f%%", atRisk.currentPercentage)) vs target \(String(format: "%.0f%%", atRisk.requiredPercentage)))")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.75))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                )
+        )
     }
 
     private func progressCard(for result: AttendanceResult) -> some View {
         let progress = min(max(result.currentPercentage / 100, 0), 1)
-        let ringColor = result.status == .safe ? Color.green : Color.red
+        let ringColor = result.status == .safe ? Color(red: 0.15, green: 0.85, blue: 0.5) : Color(red: 1.0, green: 0.3, blue: 0.3)
 
-        return VStack(spacing: 10) {
-            Text("\(Int(result.currentPercentage.rounded()))%")
-                .font(.system(size: 26, weight: .bold, design: .rounded))
-                .foregroundStyle(ringColor)
-                .frame(width: 88, height: 88)
-                .background(
-                    Circle()
-                        .fill(ringColor.opacity(0.08))
-                )
-                .overlay {
-                    Circle()
-                        .trim(from: 0, to: progress)
-                        .stroke(ringColor, style: StrokeStyle(lineWidth: 8, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                        .padding(4)
-                }
+        return VStack(spacing: 14) {
+            ZStack {
+                Circle()
+                    .stroke(Color.white.opacity(0.1), lineWidth: 10)
+                
+                Circle()
+                    .trim(from: 0, to: progress)
+                    .stroke(
+                        ringColor,
+                        style: StrokeStyle(lineWidth: 10, lineCap: .round)
+                    )
+                    .rotationEffect(.degrees(-90))
+                    .shadow(color: ringColor.opacity(0.3), radius: 5, x: 0, y: 0)
+                
+                Text("\(Int(result.currentPercentage.rounded()))%")
+                    .font(.system(size: 24, weight: .black, design: .rounded))
+                    .foregroundStyle(.white)
+            }
+            .frame(width: 90, height: 90)
 
-            Text("Current attendance")
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .foregroundStyle(.secondary)
+            Text("CURRENT\nSTANDING")
+                .font(.system(size: 11, weight: .black, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.5))
+                .multilineTextAlignment(.center)
+                .tracking(1.0)
         }
-        .frame(maxWidth: 124)
-        .padding(16)
+        .frame(maxWidth: 130)
+        .padding(20)
         .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(.white)
-                .shadow(color: Color.black.opacity(0.08), radius: 12, x: 0, y: 5)
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .stroke(Color.white.opacity(0.15), lineWidth: 1)
+                )
+                .shadow(color: Color.black.opacity(0.3), radius: 15, x: 0, y: 8)
         )
     }
 
-    private func progressBar(for result: AttendanceResult) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+    private func progressBar(for result: AttendanceResult, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
             GeometryReader { geometry in
                 let currentWidth = geometry.size.width * min(max(result.currentPercentage / 100, 0), 1)
                 let targetWidth = geometry.size.width * min(max(viewModel.requiredPercentage / 100, 0), 1)
 
                 Capsule()
-                    .fill(Color.white.opacity(0.18))
+                    .fill(Color.black.opacity(0.4))
                     .overlay(alignment: .leading) {
                         Capsule()
-                            .fill(.white)
-                            .frame(width: max(28, currentWidth))
+                            .fill(color)
+                            .shadow(color: color.opacity(0.4), radius: 4, x: 0, y: 0)
+                            .frame(width: max(20, currentWidth))
                     }
                     .overlay(alignment: .leading) {
                         Rectangle()
-                            .fill(Color.white.opacity(0.95))
-                            .frame(width: 3, height: 18)
+                            .fill(Color.white)
+                            .frame(width: 4, height: 20)
+                            .shadow(color: .white, radius: 4, x: 0, y: 0)
                             .offset(x: max(0, min(targetWidth, geometry.size.width - 2)))
                     }
             }
-            .frame(height: 10)
+            .frame(height: 12)
 
             HStack(spacing: 8) {
-                Text("Current \(Int(result.currentPercentage.rounded()))%")
+                Text("CURRENT: \(Int(result.currentPercentage.rounded()))%")
                 Spacer()
-                Text("Target \(Int(viewModel.requiredPercentage))%")
+                Text("TARGET: \(Int(viewModel.requiredPercentage))%")
             }
-            .font(.system(size: 12, weight: .semibold, design: .rounded))
-            .foregroundStyle(.white.opacity(0.94))
+            .font(.system(size: 12, weight: .heavy, design: .rounded))
+            .foregroundStyle(.white.opacity(0.8))
+            .padding(.top, 4)
 
             Text(gapLabel(for: result))
-                .font(.system(size: 11, weight: .medium, design: .rounded))
-                .foregroundStyle(.white.opacity(0.86))
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.5))
         }
     }
 
@@ -339,65 +779,96 @@ struct HomeView: View {
     }
 
     private func heroTitle(for result: AttendanceResult) -> String {
+        if viewModel.totalClasses == 0 {
+            return "No classes logged yet."
+        }
+        if isPerfectAttendance(result: result) {
+            return "You're perfect, but don't get overconfident 😄"
+        }
+        if isRecoveryMode(result: result) {
+            return "Recovery mode activated."
+        }
+        if isCriticalRisk(result: result) {
+            return "Attend next \(result.recoveryNeeded) classes or you're in danger ⚠️"
+        }
         if result.status == .safe {
             return result.bunkAllowed > 0
-                ? "You can skip \(result.bunkAllowed) classes"
-                : "You are exactly on the safe line"
+                ? "You can skip \(result.bunkAllowed) classes safely."
+                : "Perfectly balanced on the safe line."
         }
-
-        return "Attend the next \(result.recoveryNeeded) classes to reach \(Int(viewModel.requiredPercentage))%"
+        return "Attend next \(result.recoveryNeeded) classes to recover."
     }
 
     private func heroSubtitle(for result: AttendanceResult) -> String {
-        if result.status == .safe {
-            return "Current attendance is \(String(format: "%.1f%%", result.currentPercentage)). Stay above your required threshold."
+        if viewModel.totalClasses == 0 {
+            return "Add your first class record to unlock predictions."
         }
-
-        return "Current attendance is \(String(format: "%.1f%%", result.currentPercentage)). Attend the next \(result.recoveryNeeded) classes without skipping."
+        if isPerfectAttendance(result: result) {
+            return "100% attendance streak. Great discipline."
+        }
+        if isRecoveryMode(result: result) {
+            return "You're below 50%. Focus on attending consistently for the next few weeks."
+        }
+        if isCriticalRisk(result: result) {
+            return "One more bunk can increase the recovery burden quickly."
+        }
+        if result.status == .safe {
+            return result.bunkAllowed <= 1
+                ? "1 more bunk = danger ⚠️"
+                : "You're chilling 😎 Current attendance is \(String(format: "%.1f%%", result.currentPercentage))."
+        }
+        return "Your rate is \(String(format: "%.1f%%", result.currentPercentage)). Perfect attendance is mandatory now."
     }
 
     private func scenarioInsight(baseResult: AttendanceResult?, displayedResult: AttendanceResult) -> String {
         let percentageText = String(format: "%.0f%%", displayedResult.currentPercentage)
-        let statusText = displayedResult.status == .safe ? "Still safe" : "At risk"
+        let statusText = displayedResult.status == .safe ? "System Safe" : "Risk Detected"
 
         guard selectedScenario != .current, let _ = baseResult else {
             if displayedResult.status == .safe {
-                return "You're at \(percentageText) — well above target"
+                return "Optimized: \(percentageText) — safely above target."
             }
-
-            return "Attend the next \(displayedResult.recoveryNeeded) classes to reach \(Int(viewModel.requiredPercentage))%"
+            return "Action Required: Attend next \(displayedResult.recoveryNeeded) classes."
         }
 
         if displayedResult.status == .safe {
-            return "After \(selectedScenario.description) -> \(percentageText) (\(statusText))"
+            return "Post Simulation → \(percentageText) (\(statusText))"
         }
-
-        return "After \(selectedScenario.description) -> attend the next \(displayedResult.recoveryNeeded) classes to reach \(Int(viewModel.requiredPercentage))%"
+        return "Post Simulation → Must attend next \(displayedResult.recoveryNeeded) classes."
     }
 
     private func actionSummary(for result: AttendanceResult) -> String {
-        if result.status == .safe {
-            return "Skip \(result.bunkAllowed) classes safely"
+        if viewModel.totalClasses == 0 {
+            return "Log first class"
         }
-
-        return "Attend the next \(result.recoveryNeeded) classes"
+        if isRecoveryMode(result: result) {
+            return "Recovery mode"
+        }
+        if result.status == .safe {
+            return "Skip \(result.bunkAllowed) classes"
+        }
+        return "Attend \(result.recoveryNeeded) next"
     }
 
     private func planSubtitle(for result: AttendanceResult) -> String {
-        if result.status == .safe {
-            return "You are above the required threshold"
+        if viewModel.totalClasses == 0 {
+            return "Start tracking"
         }
-
-        return "Reach \(Int(viewModel.requiredPercentage))% without skipping"
+        if isRecoveryMode(result: result) {
+            return "Below 50% attendance"
+        }
+        if result.status == .safe {
+            return "Retains threshold"
+        }
+        return "Critical recovery"
     }
 
     private func gapLabel(for result: AttendanceResult) -> String {
         let gap = max(0, viewModel.requiredPercentage - result.currentPercentage)
         if gap == 0 {
-            return "Gap to target: 0%"
+            return "GAP TO TARGET: 0%"
         }
-
-        return "Gap to target: \(String(format: "%.1f%%", gap))"
+        return "GAP TO TARGET: \(String(format: "%.1f%%", gap))"
     }
 
     private func stepperButton(
@@ -411,13 +882,18 @@ struct HomeView: View {
             adjustInput(text: text, keyboardType: keyboardType, delta: delta)
         } label: {
             Image(systemName: symbol)
-                .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(.blue)
-                .frame(width: 38, height: 38)
+                .font(.system(size: 18, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 44, height: 44)
                 .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color.blue.opacity(0.10))
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.white.opacity(0.1))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                        )
                 )
+                .shadow(color: Color.black.opacity(0.2), radius: 5, x: 0, y: 2)
         }
         .buttonStyle(PressableButtonStyle())
     }
@@ -436,23 +912,372 @@ struct HomeView: View {
         }
     }
 
-    private var screenBackgroundColor: Color {
-        Color(red: 0.96, green: 0.97, blue: 0.99)
-    }
-
-    private var fieldBackgroundColor: Color {
-        Color(red: 0.94, green: 0.95, blue: 0.97)
-    }
-
     private func triggerLightHaptic() {
         #if canImport(UIKit)
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         #endif
+    }
+
+    private func shareResult(_ result: AttendanceResult) {
+        let message = shareMessage(for: result)
+        #if canImport(UIKit)
+        if let image = generateShareImage(result: result, message: message) {
+            shareItems = [image, message]
+        } else {
+            shareItems = [message]
+        }
+        #else
+        shareItems = [message]
+        #endif
+        isShowingShareSheet = true
+    }
+
+    private func requestAppReview() {
+        #if canImport(StoreKit) && canImport(UIKit)
+        guard
+            let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene
+        else {
+            return
+        }
+        AppStore.requestReview(in: scene)
+        #endif
+    }
+
+    private func shareMessage(for result: AttendanceResult) -> String {
+        let cta = "Try Student Attendance Predictor."
+        if result.status == .safe {
+            if result.bunkAllowed > 0 {
+                return "I can bunk \(result.bunkAllowed) classes safely 😎\n\(cta)"
+            }
+            return "I'm exactly on the safe attendance line ⚖️\n\(cta)"
+        }
+        return "I'm in recovery mode: need to attend \(result.recoveryNeeded) classes 💪\n\(cta)"
+    }
+
+    #if canImport(UIKit)
+    private func generateShareImage(result: AttendanceResult, message: String) -> UIImage? {
+        let renderer = ImageRenderer(content: shareSnapshotCard(result: result, message: message))
+        let screenScale = (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.screen.scale ?? 2
+        renderer.scale = screenScale
+        return renderer.uiImage
+    }
+    #endif
+
+    private func shareSnapshotCard(result: AttendanceResult, message: String) -> some View {
+        let accent = result.status == .safe ? Color(red: 0.12, green: 0.82, blue: 0.46) : Color(red: 1.0, green: 0.3, blue: 0.3)
+
+        return ZStack {
+            LinearGradient(
+                colors: [
+                    Color(red: 0.06, green: 0.08, blue: 0.13),
+                    Color(red: 0.09, green: 0.11, blue: 0.18)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Attendance Predictor")
+                    .font(.system(size: 22, weight: .black, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.9))
+
+                Text(message)
+                    .font(.system(size: 32, weight: .black, design: .rounded))
+                    .foregroundStyle(.white)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                HStack(spacing: 10) {
+                    Image(systemName: result.status == .safe ? "checkmark.shield.fill" : "exclamationmark.triangle.fill")
+                        .foregroundStyle(accent)
+                    Text(result.status == .safe ? "Status: Safe" : "Status: Risk")
+                        .font(.system(size: 18, weight: .bold, design: .rounded))
+                        .foregroundStyle(accent)
+                }
+
+                Text("Current: \(String(format: "%.1f%%", result.currentPercentage)) • Target: \(Int(viewModel.requiredPercentage))%")
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.8))
+            }
+            .padding(28)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+        .frame(width: 1080, height: 1080)
+    }
+
+    private var trendGraphCard: some View {
+        let points = trendPointsForSelectedSubject()
+        let latest = points.last?.percentage ?? 0
+        let minValue = points.map(\.percentage).min() ?? 0
+        let maxValue = points.map(\.percentage).max() ?? 0
+
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("ATTENDANCE TREND")
+                    .font(.system(size: 12, weight: .black, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.55))
+                    .tracking(1.1)
+                Spacer()
+                Text("\(points.count) pts")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.55))
+            }
+
+            if points.count < 2 {
+                Text("Trend graph unlocks after at least 2 updates for this subject.")
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.85))
+            } else {
+                AttendanceTrendSparkline(points: points)
+                    .frame(height: 90)
+
+                HStack(spacing: 10) {
+                    trendChip(title: "Latest", value: "\(String(format: "%.1f", latest))%")
+                    trendChip(title: "Min", value: "\(String(format: "%.1f", minValue))%")
+                    trendChip(title: "Max", value: "\(String(format: "%.1f", maxValue))%")
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                )
+        )
+    }
+
+    private func trendPointsForSelectedSubject() -> [AttendanceTrendPoint] {
+        guard let subjectID = subjectStore.selectedSubjectID else { return [] }
+        return AttendanceTrendStore.load(subjectID: subjectID)
+    }
+
+    private func trendChip(title: String, value: String) -> some View {
+        VStack(spacing: 2) {
+            Text(title)
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.55))
+            Text(value)
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.9))
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.white.opacity(0.06))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                )
+        )
+    }
+
+    private var nextClassImpactCard: some View {
+        let attendImpact = viewModel.simulatedResult(attendMore: 1)
+        let skipImpact = viewModel.simulatedResult(skipMore: 1)
+
+        return VStack(alignment: .leading, spacing: 10) {
+            Text("NEXT CLASS IMPACT")
+                .font(.system(size: 12, weight: .black, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.55))
+                .tracking(1.1)
+
+            if viewModel.totalClasses == 0 {
+                Text("No class history yet. Add classes to see tomorrow impact.")
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.85))
+            } else {
+                if let skipImpact {
+                    Text("If you skip tomorrow → \(String(format: "%.1f%%", skipImpact.currentPercentage))")
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                        .foregroundStyle(.orange)
+                }
+                if let attendImpact {
+                    Text("If you attend tomorrow → \(String(format: "%.1f%%", attendImpact.currentPercentage))")
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color(red: 0.2, green: 0.9, blue: 0.5))
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                )
+        )
+    }
+
+    private func calculationBreakdownCard(for result: AttendanceResult) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            DisclosureGroup(isExpanded: $isBreakdownExpanded) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Current: \(viewModel.attendedClasses) / \(viewModel.totalClasses) = \(String(format: "%.2f%%", result.currentPercentage))")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.85))
+
+                    if let simulated = simulatedScenarioCounts(), let simulatedResult = displayResult {
+                        Text("After \(simulated.label):")
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.75))
+                        Text("\(simulated.attended) / \(simulated.total) = \(String(format: "%.2f%%", simulatedResult.currentPercentage))")
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.85))
+                    }
+                }
+                .padding(.top, 6)
+            } label: {
+                Text("Calculation breakdown")
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                )
+        )
+    }
+
+    private func simulatedScenarioCounts() -> (attended: Int, total: Int, label: String)? {
+        switch selectedScenario {
+        case .current:
+            return nil
+        case .skipOne:
+            return (viewModel.attendedClasses, viewModel.totalClasses + 1, "skipping 1")
+        case .skipThree:
+            return (viewModel.attendedClasses, viewModel.totalClasses + 3, "skipping 3")
+        case .attendFive:
+            return (viewModel.attendedClasses + 5, viewModel.totalClasses + 5, "attending 5")
+        }
+    }
+
+    private func isPerfectAttendance(result: AttendanceResult) -> Bool {
+        viewModel.totalClasses > 0 && viewModel.attendedClasses == viewModel.totalClasses && result.currentPercentage >= 99.9
+    }
+
+    private func isRecoveryMode(result: AttendanceResult) -> Bool {
+        viewModel.totalClasses > 0 && result.currentPercentage < 50
+    }
+
+    private func isCriticalRisk(result: AttendanceResult) -> Bool {
+        result.status == .risk && result.recoveryNeeded >= 5
+    }
+
+    private func statusTitle(for result: AttendanceResult) -> String {
+        if viewModel.totalClasses == 0 {
+            return "STATUS: READY"
+        }
+        if isPerfectAttendance(result: result) {
+            return "STATUS: PERFECT"
+        }
+        if isRecoveryMode(result: result) {
+            return "STATUS: RECOVERY MODE"
+        }
+        if result.status == .safe {
+            return "STATUS: SAFE"
+        }
+        return isCriticalRisk(result: result) ? "STATUS: CRITICAL" : "STATUS: RISK"
+    }
+
+    private func statusIconName(for result: AttendanceResult) -> String {
+        if viewModel.totalClasses == 0 {
+            return "sparkles"
+        }
+        if isPerfectAttendance(result: result) {
+            return "star.circle.fill"
+        }
+        if isRecoveryMode(result: result) {
+            return "bolt.heart.fill"
+        }
+        if result.status == .safe {
+            return "shield.checkerboard"
+        }
+        return isCriticalRisk(result: result) ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill"
+    }
+
+    private func colorForRiskLevel(_ level: RiskAlertLevel) -> Color {
+        switch level {
+        case .stable:
+            return .green
+        case .warning:
+            return .orange
+        case .critical:
+            return .red
+        }
+    }
+}
+
+private struct AttendanceTrendSparkline: View {
+    let points: [AttendanceTrendPoint]
+
+    var body: some View {
+        GeometryReader { geometry in
+            let width = geometry.size.width
+            let height = geometry.size.height
+            let minimum = points.map(\.percentage).min() ?? 0
+            let maximum = points.map(\.percentage).max() ?? 100
+            let range = max(maximum - minimum, 0.1)
+            let stepX = points.count > 1 ? width / CGFloat(points.count - 1) : width
+
+            ZStack {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.black.opacity(0.2))
+
+                Path { path in
+                    guard points.isEmpty == false else { return }
+                    for index in points.indices {
+                        let point = points[index]
+                        let x = CGFloat(index) * stepX
+                        let yRatio = (point.percentage - minimum) / range
+                        let y = height - (CGFloat(yRatio) * height)
+                        if index == 0 {
+                            path.move(to: CGPoint(x: x, y: y))
+                        } else {
+                            path.addLine(to: CGPoint(x: x, y: y))
+                        }
+                    }
+                }
+                .stroke(
+                    LinearGradient(
+                        colors: [Color(red: 0.22, green: 0.84, blue: 0.95), Color(red: 0.22, green: 0.95, blue: 0.58)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    ),
+                    style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round)
+                )
+
+                if let last = points.last {
+                    let x = CGFloat(points.count - 1) * stepX
+                    let yRatio = (last.percentage - minimum) / range
+                    let y = height - (CGFloat(yRatio) * height)
+
+                    Circle()
+                        .fill(Color.white)
+                        .frame(width: 8, height: 8)
+                        .overlay(
+                            Circle().stroke(Color(red: 0.22, green: 0.95, blue: 0.58), lineWidth: 2)
+                        )
+                        .position(x: x, y: y)
+                }
+            }
+        }
     }
 }
 
 #Preview {
-    HomeView()
+    ContentView()
 }
 
 enum KeyboardType {
@@ -484,13 +1309,13 @@ private enum ScenarioAction: CaseIterable, Identifiable {
     var description: String {
         switch self {
         case .current:
-            return "current attendance"
+            return "current"
         case .skipOne:
-            return "skipping 1 class"
+            return "skipping 1"
         case .skipThree:
-            return "skipping 3 classes"
+            return "skipping 3"
         case .attendFive:
-            return "attending 5 classes"
+            return "attending 5"
         }
     }
 }
@@ -514,8 +1339,292 @@ private extension View {
 private struct PressableButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
-            .opacity(configuration.isPressed ? 0.94 : 1.0)
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+            .scaleEffect(configuration.isPressed ? 0.94 : 1.0)
+            .opacity(configuration.isPressed ? 0.8 : 1.0)
+            .animation(.spring(response: 0.3, dampingFraction: 0.6), value: configuration.isPressed)
+    }
+}
+
+#if canImport(UIKit)
+private struct ActivityView: UIViewControllerRepresentable {
+    let activityItems: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+#endif
+
+private struct SubjectListView: View {
+    @ObservedObject var subjectStore: SubjectStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var isShowingAddPrompt = false
+    @State private var newSubjectName = ""
+    @State private var isShowingRenamePrompt = false
+    @State private var renameSubjectName = ""
+    @State private var renamingSubjectID: UUID?
+    @State private var editingTimetableSubjectID: UUID?
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Subjects") {
+                    ForEach(subjectStore.subjects) { subject in
+                        Button {
+                            subjectStore.selectSubject(subject)
+                            dismiss()
+                        } label: {
+                            HStack(spacing: 12) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(subject.name)
+                                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(.white)
+                                    Text("Target \(Int(subject.requiredPercentage))%")
+                                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                                        .foregroundStyle(.white.opacity(0.6))
+                                }
+
+                                Spacer()
+
+                                Text("\(Int(subject.currentPercentage.rounded()))%")
+                                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                                    .foregroundStyle(subject.status == .safe ? Color.green : Color.red)
+
+                                if subject.id == subjectStore.selectedSubjectID {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(Color.green)
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        .listRowBackground(Color.white.opacity(0.04))
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            Button("Timetable") {
+                                editingTimetableSubjectID = subject.id
+                            }
+                            .tint(.purple)
+
+                            Button("Rename") {
+                                renamingSubjectID = subject.id
+                                renameSubjectName = subject.name
+                                isShowingRenamePrompt = true
+                            }
+                            .tint(.blue)
+
+                            Button(role: .destructive) {
+                                subjectStore.deleteSubject(id: subject.id)
+                            } label: {
+                                Text("Delete")
+                            }
+                        }
+                    }
+                    .onDelete(perform: subjectStore.deleteSubjects)
+                }
+
+                // v0.2 (hidden for this release): Plan section
+                // Section("Plan") {
+                //     Text(subjectStore.subjectLimitDescription)
+                //         .font(.system(size: 13, weight: .medium, design: .rounded))
+                //         .foregroundStyle(.white.opacity(0.75))
+                //         .listRowBackground(Color.white.opacity(0.04))
+                //
+                //     // v0.2 (hidden for this release): Upgrade to Pro entry points
+                //     // if subjectStore.isAtSubjectLimit && subjectStore.isProUnlocked == false {
+                //     //     Text("Limit reached: add more subjects with Pro.")
+                //     //         .font(.system(size: 12, weight: .semibold, design: .rounded))
+                //     //         .foregroundStyle(.orange)
+                //     //         .listRowBackground(Color.white.opacity(0.04))
+                //     // }
+                //     //
+                //     // if subjectStore.isProUnlocked == false {
+                //     //     Button {
+                //     //         subjectStore.requestProUpgrade()
+                //     //     } label: {
+                //     //         Label("Upgrade to Pro", systemImage: "sparkles")
+                //     //             .font(.system(size: 14, weight: .bold, design: .rounded))
+                //     //             .foregroundStyle(.white)
+                //     //     }
+                //     //     .listRowBackground(Color.white.opacity(0.04))
+                //     // }
+                // }
+            }
+            .scrollContentBackground(.hidden)
+            .background(Color(red: 0.05, green: 0.06, blue: 0.1))
+            .navigationTitle("Subjects")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        newSubjectName = ""
+                        isShowingAddPrompt = true
+                    } label: {
+                        Image(systemName: "plus")
+                            .foregroundStyle(Color.white)
+                    }
+                }
+            }
+            .alert("New Subject", isPresented: $isShowingAddPrompt) {
+                TextField("e.g. Math", text: $newSubjectName)
+                Button("Cancel", role: .cancel) {}
+                Button("Add") {
+                    let result = subjectStore.addSubject(named: newSubjectName)
+                    if case .limitReached = result {
+                        // Release override safety: auto-disable gating and retry add.
+                        subjectStore.setProGatingEnabled(false)
+                        _ = subjectStore.addSubject(named: newSubjectName)
+                    }
+                }
+            } message: {
+                Text("Type a subject name or leave blank to auto-name.")
+            }
+            .alert("Rename Subject", isPresented: $isShowingRenamePrompt) {
+                TextField("Subject name", text: $renameSubjectName)
+                Button("Cancel", role: .cancel) {}
+                Button("Save") {
+                    if let subjectID = renamingSubjectID {
+                        subjectStore.renameSubject(id: subjectID, to: renameSubjectName)
+                    }
+                }
+            } message: {
+                Text("Update the subject name.")
+            }
+            .sheet(
+                isPresented: Binding(
+                    get: { editingTimetableSubjectID != nil },
+                    set: { isPresented in
+                        if isPresented == false {
+                            editingTimetableSubjectID = nil
+                        }
+                    }
+                )
+            ) {
+                if let subjectID = editingTimetableSubjectID {
+                    TimetableEditorSheet(
+                        subjectStore: subjectStore,
+                        subjectID: subjectID
+                    )
+                    .preferredColorScheme(.dark)
+                }
+            }
+        }
+    }
+}
+
+private struct TimetableEditorSheet: View {
+    @ObservedObject var subjectStore: SubjectStore
+    let subjectID: UUID
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var schedule: WeeklySchedule = .empty
+    @State private var projectionWeeks = 1
+    @State private var holidayClassCount = 0
+    @State private var expectedAbsences = 0
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Weekly Classes") {
+                    dayStepper("Monday", value: $schedule.monday)
+                    dayStepper("Tuesday", value: $schedule.tuesday)
+                    dayStepper("Wednesday", value: $schedule.wednesday)
+                    dayStepper("Thursday", value: $schedule.thursday)
+                    dayStepper("Friday", value: $schedule.friday)
+                    dayStepper("Saturday", value: $schedule.saturday)
+                    dayStepper("Sunday", value: $schedule.sunday)
+                }
+
+                Section("Summary") {
+                    HStack {
+                        Text("Total classes / week")
+                        Spacer()
+                        Text("\(schedule.totalPerWeek)")
+                            .font(.system(size: 16, weight: .bold, design: .rounded))
+                    }
+
+                    Button("Set subject total classes = weekly total") {
+                        subjectStore.updateWeeklySchedule(for: subjectID, schedule: schedule)
+                        subjectStore.applyWeeklySchedule(for: subjectID, addToExisting: false)
+                    }
+
+                    Button("Add one full week to total classes") {
+                        subjectStore.updateWeeklySchedule(for: subjectID, schedule: schedule)
+                        subjectStore.applyWeeklySchedule(for: subjectID, addToExisting: true)
+                    }
+                }
+
+                Section("Auto-Mark Expected Classes") {
+                    Stepper("Weeks to project: \(projectionWeeks)", value: $projectionWeeks, in: 1...16)
+                    Stepper("Holiday classes to exclude: \(holidayClassCount)", value: $holidayClassCount, in: 0...80)
+                    Stepper("Expected absences: \(expectedAbsences)", value: $expectedAbsences, in: 0...80)
+
+                    let expected = CalculationService.projectedTotalClasses(
+                        schedule: schedule,
+                        weeks: projectionWeeks,
+                        holidayClassCount: holidayClassCount
+                    )
+                    let expectedAttended = max(0, expected - min(expectedAbsences, expected))
+
+                    Text("Projected classes: \(expected), projected attended: \(expectedAttended)")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.secondary)
+
+                    Button("Apply projection to existing totals") {
+                        subjectStore.updateWeeklySchedule(for: subjectID, schedule: schedule)
+                        subjectStore.applyProjectedSchedule(
+                            for: subjectID,
+                            weeks: projectionWeeks,
+                            holidayClassCount: holidayClassCount,
+                            expectedAbsences: expectedAbsences,
+                            addToExisting: true
+                        )
+                    }
+
+                    Button("Replace totals with projection") {
+                        subjectStore.updateWeeklySchedule(for: subjectID, schedule: schedule)
+                        subjectStore.applyProjectedSchedule(
+                            for: subjectID,
+                            weeks: projectionWeeks,
+                            holidayClassCount: holidayClassCount,
+                            expectedAbsences: expectedAbsences,
+                            addToExisting: false
+                        )
+                    }
+                }
+            }
+            .navigationTitle("Timetable")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Close") { dismiss() }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Save") {
+                        subjectStore.updateWeeklySchedule(for: subjectID, schedule: schedule)
+                        dismiss()
+                    }
+                }
+            }
+            .onAppear {
+                schedule = subjectStore.weeklySchedule(for: subjectID)
+            }
+        }
+    }
+
+    private func dayStepper(_ title: String, value: Binding<Int>) -> some View {
+        Stepper(value: value, in: 0...12) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text("\(value.wrappedValue)")
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+            }
+        }
     }
 }

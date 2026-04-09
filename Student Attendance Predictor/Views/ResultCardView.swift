@@ -32,17 +32,18 @@ struct ResultCardView: View {
     var body: some View {
         VStack(alignment: alignment, spacing: 6) {
             Text(value)
-                .font(.system(size: isEmphasized ? 24 : 22, weight: .bold, design: .rounded))
+                .font(.system(size: isEmphasized ? 26 : 22, weight: .black, design: .rounded))
                 .foregroundStyle(tint)
+                .shadow(color: tint.opacity(0.6), radius: 8, x: 0, y: 0)
 
             Text(title)
-                .font(.system(size: isEmphasized ? 15 : 14, weight: .medium, design: .rounded))
-                .foregroundStyle(.primary)
+                .font(.system(size: isEmphasized ? 15 : 14, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.9))
 
             if let subtitle {
                 Text(subtitle)
-                    .font(.system(size: 12, weight: .regular, design: .rounded))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.6))
                     .multilineTextAlignment(alignment == .center ? .center : .leading)
             }
         }
@@ -50,9 +51,20 @@ struct ResultCardView: View {
         .padding(.vertical, isEmphasized ? 18 : 14)
         .padding(.horizontal, 12)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(.white)
-                .shadow(color: Color.black.opacity(0.08), radius: 10, x: 0, y: 4)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.2), Color.white.opacity(0.05)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 1
+                        )
+                )
+                .shadow(color: Color.black.opacity(0.3), radius: 15, x: 0, y: 8)
         )
     }
 }

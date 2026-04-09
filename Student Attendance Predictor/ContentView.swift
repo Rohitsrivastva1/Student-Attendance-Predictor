@@ -7,10 +7,60 @@
 
 import SwiftUI
 
+// MARK: - v0.2 Release Notes (Pending Configuration)
+// TODO: Release "What-If Simulator" experience.
+// TODO: Release "Calculation" module improvements.
+// TODO: Release "Upgrade to Pro" flow (currently not configured).
+
 struct ContentView: View {
-    var body: some View {
-        HomeView()
+    @StateObject private var subjectStore: SubjectStore
+
+    init() {
+        _subjectStore = StateObject(
+            wrappedValue: SubjectStore(
+                onUpgradeRequested: {
+                    NotificationCenter.default.post(name: .showProUpsellRequested, object: nil)
+                }
+            )
+        )
     }
+
+    var body: some View {
+        HomeView(viewModel: subjectStore.calculator, subjectStore: subjectStore)
+            // v0.2 (hidden for this release): Upgrade to Pro hook UI
+            // .onReceive(NotificationCenter.default.publisher(for: .showProUpsellRequested)) { _ in
+            //     isShowingProUpsell = true
+            // }
+            // .alert("Pro Upgrade Hook", isPresented: $isShowingProUpsell) {
+            //     Button("Later", role: .cancel) {}
+            //     Button("Unlock Pro") {
+            //         subjectStore.setProUnlocked(true)
+            //     }
+            // } message: {
+            //     Text("This is the feature-flagged upgrade hook point. Wire this action to StoreKit/RevenueCat paywall.")
+            // }
+            .onAppear {
+                // Release override: keep Pro gating disabled while upsell is hidden.
+                subjectStore.setProGatingEnabled(false)
+            }
+            .onOpenURL { url in
+                guard url.scheme == "bunkplanner", url.host == "widget-tap" else { return }
+                let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+                let querySubjectID = components?.queryItems?.first(where: { $0.name == "subjectID" })?.value
+                if
+                    let querySubjectID,
+                    let subjectUUID = UUID(uuidString: querySubjectID)
+                {
+                    subjectStore.selectSubject(id: subjectUUID)
+                } else if let subjectID = SharedDataWriter.lastSubjectID {
+                    subjectStore.selectSubject(id: subjectID)
+                }
+            }
+    }
+}
+
+private extension Notification.Name {
+    static let showProUpsellRequested = Notification.Name("showProUpsellRequested")
 }
 
 #Preview {
