@@ -43,19 +43,6 @@ struct ContentView: View {
                 // Release override: keep Pro gating disabled while upsell is hidden.
                 subjectStore.setProGatingEnabled(false)
             }
-            .onOpenURL { url in
-                guard url.scheme == "bunkplanner", url.host == "widget-tap" else { return }
-                let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-                let querySubjectID = components?.queryItems?.first(where: { $0.name == "subjectID" })?.value
-                if
-                    let querySubjectID,
-                    let subjectUUID = UUID(uuidString: querySubjectID)
-                {
-                    subjectStore.selectSubject(id: subjectUUID)
-                } else if let subjectID = SharedDataWriter.lastSubjectID {
-                    subjectStore.selectSubject(id: subjectID)
-                }
-            }
     }
 }
 

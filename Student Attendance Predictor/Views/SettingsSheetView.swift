@@ -4,12 +4,21 @@
 //
 
 import SwiftUI
+#if canImport(StoreKit)
+import StoreKit
+#endif
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct SettingsSheetView: View {
     @ObservedObject var viewModel: AttendanceViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var defaultRequiredPercentage: String
+    @State private var rateErrorMessage: String?
     @AppStorage("feature.notificationsEnabled") private var notificationsEnabled = true
+    
+    private let appStoreID = "6761951427"
 
     init(viewModel: AttendanceViewModel) {
         self.viewModel = viewModel
@@ -71,9 +80,31 @@ struct SettingsSheetView: View {
                             .textSelection(.enabled)
                     }
                 }
+                
+                Section("Feedback") {
+                    Button("Rate Us on App Store") {
+                        openRateUsFlow()
+                    }
+                    
+                    Text("This opens the App Store review page where ratings submit reliably.")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(.secondary)
+                }
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
+            .alert("Unable to Open App Store", isPresented: Binding(
+                get: { rateErrorMessage != nil },
+                set: { isPresented in
+                    if isPresented == false {
+                        rateErrorMessage = nil
+                    }
+                }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(rateErrorMessage ?? "")
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") {
@@ -112,6 +143,24 @@ struct SettingsSheetView: View {
 
         return result
     }
+    
+    private func openRateUsFlow() {
+        #if canImport(UIKit)
+        guard let url = URL(string: "itms-apps://itunes.apple.com/app/id\(appStoreID)?action=write-review") else {
+            rateErrorMessage = "Could not create App Store review URL."
+            return
+        }
+        
+        guard UIApplication.shared.canOpenURL(url) else {
+            rateErrorMessage = "App Store is not available on this device."
+            return
+        }
+        
+        UIApplication.shared.open(url)
+        #else
+        rateErrorMessage = "App Store review is available on iOS only."
+        #endif
+    }
 
     private static func formattedPercentage(_ value: Double) -> String {
         let roundedValue = (value * 10).rounded() / 10
@@ -127,15 +176,15 @@ struct PrivacyPolicyView: View {
             VStack(alignment: .leading, spacing: 16) {
                 policySection(
                     title: "Overview",
-                    body: "Student Attendance Predictor stores your latest attendance inputs and your default attendance target locally on your device using Apple UserDefaults so the app can restore them the next time you open it."
+                    body: "Bunk Planner: Attendance Track stores your latest attendance inputs and your default attendance target locally on your device using Apple UserDefaults so the app can restore them the next time you open it."
                 )
                 policySection(
                     title: "Data Handling",
-                    body: "The app does not require an account, and it does not transmit your attendance inputs to the developer or to a remote server."
+                    body: "The app does not require an account. Your attendance numbers, subject names, and related preferences you enter are stored on your device (for example in Apple UserDefaults) so the app can work offline and restore your session. The developer does not operate a login backend for this app and does not receive those inputs on our own servers."
                 )
                 policySection(
-                    title: "Sharing and Tracking",
-                    body: "The current app build does not include third-party advertising SDKs, analytics SDKs, or cross-app tracking."
+                    title: "Notifications",
+                    body: "If you turn on local “risk” reminders, those alerts are scheduled on your device. They are not sent to our servers."
                 )
                 policySection(
                     title: "Support and Privacy Contact",

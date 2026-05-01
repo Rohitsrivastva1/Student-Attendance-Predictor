@@ -268,7 +268,6 @@ final class SubjectStore: ObservableObject {
             guard selectedSubjectID != oldValue else { return }
             persistSelectedSubjectID()
             loadSelectedSubjectIntoCalculator()
-            writeWidgetSnapshotForSelectedSubject()
         }
     }
 
@@ -364,7 +363,6 @@ final class SubjectStore: ObservableObject {
             selectedSubjectID = subjects.first?.id
         }
         loadSelectedSubjectIntoCalculator()
-        writeWidgetSnapshotForSelectedSubject()
         bindCalculatorChanges()
         NotificationService.requestAuthorizationIfNeeded()
         NotificationService.scheduleClassReminder()
@@ -446,9 +444,6 @@ final class SubjectStore: ObservableObject {
         entity.updatedAt = Date()
         saveContext()
         loadSubjects()
-        if selectedSubjectID == id {
-            writeWidgetSnapshotForSelectedSubject()
-        }
     }
 
     func weeklySchedule(for subjectID: UUID) -> WeeklySchedule {
@@ -604,13 +599,6 @@ final class SubjectStore: ObservableObject {
 
         saveContext()
         loadSubjects()
-        pushWidgetSnapshotIfPossible(
-            subjectID: selectedID,
-            subjectName: entity.name,
-            totalClasses: Int(entity.totalClasses),
-            attendedClasses: Int(entity.attendedClasses),
-            requiredPercentage: entity.requiredPercentage
-        )
         scheduleNotificationIfNeeded(
             subjectName: entity.name,
             totalClasses: Int(entity.totalClasses),
@@ -634,31 +622,6 @@ final class SubjectStore: ObservableObject {
         )
     }
 
-    private func writeWidgetSnapshotForSelectedSubject() {
-        guard let subject = selectedSubject else { return }
-        SharedDataWriter.write(
-            subjectID: subject.id,
-            subjectName: subject.name,
-            attendedClasses: subject.attendedClasses,
-            totalClasses: subject.totalClasses,
-            requiredPercentage: subject.requiredPercentage
-        )
-        writeAllSubjectsForWidget()
-    }
-
-    private func writeAllSubjectsForWidget() {
-        let payload = subjects.map {
-            SharedDataWriter.SharedSubjectSnapshot(
-                id: $0.id.uuidString,
-                name: $0.name,
-                attendedClasses: $0.attendedClasses,
-                totalClasses: $0.totalClasses,
-                requiredPercentage: $0.requiredPercentage
-            )
-        }
-        SharedDataWriter.writeAllSubjects(payload)
-    }
-
     private func loadSubjects() {
         let request = SubjectEntity.fetchRequest()
         request.sortDescriptors = [NSSortDescriptor(key: "createdAt", ascending: true)]
@@ -675,7 +638,6 @@ final class SubjectStore: ObservableObject {
                 createdAt: $0.createdAt
             )
         }
-        writeAllSubjectsForWidget()
     }
 
     private func ensureAtLeastOneSubject() {
@@ -735,22 +697,6 @@ final class SubjectStore: ObservableObject {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else { return nil }
         return String(trimmed.prefix(40))
-    }
-
-    private func pushWidgetSnapshotIfPossible(
-        subjectID: UUID,
-        subjectName: String,
-        totalClasses: Int,
-        attendedClasses: Int,
-        requiredPercentage: Double
-    ) {
-        SharedDataWriter.write(
-            subjectID: subjectID,
-            subjectName: subjectName,
-            attendedClasses: attendedClasses,
-            totalClasses: totalClasses,
-            requiredPercentage: requiredPercentage
-        )
     }
 
     private func scheduleNotificationIfNeeded(

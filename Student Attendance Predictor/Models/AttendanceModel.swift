@@ -35,7 +35,7 @@ struct AttendanceInput {
     let requiredPercentage: Double
 }
 
-struct AttendanceResult {
+struct AttendanceResult: Equatable {
     let currentPercentage: Double
     let bunkAllowed: Int
     let recoveryNeeded: Int
@@ -49,7 +49,7 @@ struct AttendanceTrendPoint: Codable, Equatable, Identifiable {
     var id: TimeInterval { timestamp.timeIntervalSince1970 }
 }
 
-enum AttendanceStatus: String {
+enum AttendanceStatus: String, Equatable {
     case safe = "Safe"
     case risk = "Risk"
 }

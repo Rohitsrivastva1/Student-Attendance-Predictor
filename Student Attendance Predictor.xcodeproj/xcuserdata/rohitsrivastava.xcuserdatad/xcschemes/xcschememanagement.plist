@@ -4,11 +4,6 @@
 <dict>
 	<key>SchemeUserState</key>
 	<dict>
-		<key>AttendanceWidgetExtensionExtension.xcscheme_^#shared#^_</key>
-		<dict>
-			<key>orderHint</key>
-			<integer>1</integer>
-		</dict>
 		<key>Student Attendance Predictor.xcscheme_^#shared#^_</key>
 		<dict>
 			<key>orderHint</key>
