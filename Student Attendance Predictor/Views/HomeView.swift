@@ -13,6 +13,7 @@ import UIKit
 
 struct HomeView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @EnvironmentObject var storeKit: StoreKitManager
     @ObservedObject var viewModel: AttendanceViewModel
     @ObservedObject var subjectStore: SubjectStore
     @State private var selectedTab: HomeTab = .home
@@ -31,6 +32,7 @@ struct HomeView: View {
     @State private var forecastWeeks = 1
     @State private var forecastHolidayClasses = 0
     @State private var forecastExpectedAbsences = 0
+    @State private var showPaywall = false
     
     private var isRegularWidth: Bool {
         horizontalSizeClass == .regular
@@ -133,6 +135,9 @@ struct HomeView: View {
             .sheet(isPresented: $isShowingSubjects) {
                 SubjectListView(subjectStore: subjectStore)
                     .preferredColorScheme(.dark)
+            }
+            .sheet(isPresented: $showPaywall) {
+                PaywallView()
             }
             .sheet(
                 isPresented: Binding(
@@ -565,7 +570,11 @@ struct HomeView: View {
                 Spacer()
                 Button {
                     triggerLightHaptic()
-                    _ = subjectStore.addSubject()
+                    if subjectStore.subjects.count < 2 || storeKit.hasProAccess {
+                        _ = subjectStore.addSubject()
+                    } else {
+                        showPaywall = true
+                    }
                 } label: {
                     Label("Add", systemImage: "plus")
                         .font(.system(size: 12, weight: .bold, design: .rounded))
@@ -2170,6 +2179,7 @@ private struct ActivityView: UIViewControllerRepresentable {
 #endif
 
 private struct SubjectListView: View {
+    @EnvironmentObject var storeKit: StoreKitManager
     @ObservedObject var subjectStore: SubjectStore
     @Environment(\.dismiss) private var dismiss
     @State private var isShowingAddPrompt = false
@@ -2178,6 +2188,7 @@ private struct SubjectListView: View {
     @State private var renameSubjectName = ""
     @State private var renamingSubjectID: UUID?
     @State private var editingTimetableSubjectID: UUID?
+    @State private var showPaywall = false
 
     var body: some View {
         NavigationStack {
@@ -2286,11 +2297,15 @@ private struct SubjectListView: View {
                 TextField("e.g. Math", text: $newSubjectName)
                 Button("Cancel", role: .cancel) {}
                 Button("Add") {
-                    let result = subjectStore.addSubject(named: newSubjectName)
-                    if case .limitReached = result {
-                        // Release override safety: auto-disable gating and retry add.
-                        subjectStore.setProGatingEnabled(false)
-                        _ = subjectStore.addSubject(named: newSubjectName)
+                    if subjectStore.subjects.count < 2 || storeKit.hasProAccess {
+                        let result = subjectStore.addSubject(named: newSubjectName)
+                        if case .limitReached = result {
+                            // Release override safety: auto-disable gating and retry add.
+                            subjectStore.setProGatingEnabled(false)
+                            _ = subjectStore.addSubject(named: newSubjectName)
+                        }
+                    } else {
+                        showPaywall = true
                     }
                 }
             } message: {
@@ -2324,6 +2339,9 @@ private struct SubjectListView: View {
                     )
                     .preferredColorScheme(.dark)
                 }
+            }
+            .sheet(isPresented: $showPaywall) {
+                PaywallView()
             }
         }
     }

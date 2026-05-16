@@ -1,0 +1,130 @@
+{
+  "appPolicies" : {
+    "eula" : "",
+    "policies" : [
+      {
+        "locale" : "en_US",
+        "policyText" : "",
+        "policyURL" : ""
+      }
+    ]
+  },
+  "identifier" : "46FB663B",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+    {
+      "displayPrice" : "7.99",
+      "familyShareable" : true,
+      "internalID" : "6770106971",
+      "localizations" : [
+        {
+          "description" : "Unlock Bunk Planner Pro features forever with a one-time purchase.",
+          "displayName" : "Bunk Planner Lifetime",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "com.schoolabe.bunkplanner.lifetime",
+      "referenceName" : "Bunk Planner Lifetime",
+      "type" : "NonConsumable"
+    }
+  ],
+  "settings" : {
+    "_applicationInternalID" : "6761951427",
+    "_askToBuyEnabled" : false,
+    "_billingGracePeriodDuration" : "P16D",
+    "_billingGracePeriodEnabled" : true,
+    "_billingIssuesEnabled" : false,
+    "_developerTeamID" : "67ZY8256RN",
+    "_disableDialogs" : false,
+    "_failTransactionsEnabled" : false,
+    "_lastSynchronizedDate" : 800651932.74465597,
+    "_locale" : "en_US",
+    "_renewalBillingIssuesEnabled" : false,
+    "_storefront" : "USA",
+    "_storeKitErrors" : [
+
+    ],
+    "_timeRate" : 0
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "22094897",
+      "localizations" : [
+        {
+          "description" : "Bunk Planner Pro subscriptions",
+          "displayName" : "BunkPlannerPro",
+          "locale" : "en_US"
+        }
+      ],
+      "name" : "BunkPlannerPro",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "3.99",
+          "familyShareable" : true,
+          "groupNumber" : 1,
+          "internalID" : "6770106970",
+          "introductoryOffers" : [
+
+          ],
+          "localizations" : [
+            {
+              "description" : "Get a full year of Bunk Planner Pro with unlimited planning and attendance insights.",
+              "displayName" : "Bunk Planner Pro Annual",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "com.schoolabe.bunkplanner.annual",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "Bunk Planner Pro Annual",
+          "subscriptionGroupID" : "22094897",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "0.99",
+          "familyShareable" : true,
+          "groupNumber" : 2,
+          "internalID" : "6770106969",
+          "introductoryOffers" : [
+
+          ],
+          "localizations" : [
+            {
+              "description" : "Get monthly access to Bunk Planner Pro with unlimited planning and attendance insights.",
+              "displayName" : "Bunk Planner Pro Monthly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "com.schoolabe.bunkplanner.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Bunk Planner Pro Monthly",
+          "subscriptionGroupID" : "22094897",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 5,
+    "minor" : 0
+  }
+}
