@@ -7,12 +7,8 @@
 
 import SwiftUI
 
-// MARK: - v0.2 Release Notes (Pending Configuration)
-// TODO: Release "What-If Simulator" experience.
-// TODO: Release "Calculation" module improvements.
-// TODO: Release "Upgrade to Pro" flow (currently not configured).
-
 struct ContentView: View {
+    @EnvironmentObject private var storeKit: StoreKitManager
     @StateObject private var subjectStore: SubjectStore
 
     init() {
@@ -27,22 +23,17 @@ struct ContentView: View {
 
     var body: some View {
         HomeView(viewModel: subjectStore.calculator, subjectStore: subjectStore)
-            // v0.2 (hidden for this release): Upgrade to Pro hook UI
-            // .onReceive(NotificationCenter.default.publisher(for: .showProUpsellRequested)) { _ in
-            //     isShowingProUpsell = true
-            // }
-            // .alert("Pro Upgrade Hook", isPresented: $isShowingProUpsell) {
-            //     Button("Later", role: .cancel) {}
-            //     Button("Unlock Pro") {
-            //         subjectStore.setProUnlocked(true)
-            //     }
-            // } message: {
-            //     Text("This is the feature-flagged upgrade hook point. Wire this action to StoreKit/RevenueCat paywall.")
-            // }
             .onAppear {
-                // Release override: keep Pro gating disabled while upsell is hidden.
-                subjectStore.setProGatingEnabled(false)
+                subjectStore.setProGatingEnabled(true)
+                syncProAccessFromStoreKit()
             }
+            .onChange(of: storeKit.purchasedProductIDs) { _, _ in
+                syncProAccessFromStoreKit()
+            }
+    }
+
+    private func syncProAccessFromStoreKit() {
+        subjectStore.setProUnlocked(storeKit.hasProAccess)
     }
 }
 
@@ -52,4 +43,5 @@ private extension Notification.Name {
 
 #Preview {
     ContentView()
+        .environmentObject(StoreKitManager.shared)
 }

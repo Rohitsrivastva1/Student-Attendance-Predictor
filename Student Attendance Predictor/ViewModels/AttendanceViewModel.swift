@@ -253,7 +253,7 @@ final class AttendanceViewModel: ObservableObject {
 
 @MainActor
 final class SubjectStore: ObservableObject {
-    static let freeSubjectLimit = 3
+    static let freeSubjectLimit = 2
 
     enum AddSubjectResult {
         case added
@@ -347,9 +347,12 @@ final class SubjectStore: ObservableObject {
         self.onUpgradeRequested = onUpgradeRequested
         self.calculator = AttendanceViewModel(defaults: defaults)
         self.isProUnlocked = defaults.bool(forKey: Keys.proUnlocked)
-        // Release override: keep Pro gating disabled while Upgrade to Pro UI is hidden.
-        self.isProGatingEnabled = false
-        defaults.set(false, forKey: Keys.proGatingEnabled)
+        if defaults.object(forKey: Keys.proGatingEnabled) != nil {
+            self.isProGatingEnabled = defaults.bool(forKey: Keys.proGatingEnabled)
+        } else {
+            self.isProGatingEnabled = true
+            defaults.set(true, forKey: Keys.proGatingEnabled)
+        }
 
         loadSubjects()
         migrateLegacyUserDefaultsIfNeeded()
@@ -369,7 +372,10 @@ final class SubjectStore: ObservableObject {
     }
 
     func addSubject(named customName: String? = nil) -> AddSubjectResult {
-        guard canAddSubject else { return .limitReached }
+        guard canAddSubject else {
+            onUpgradeRequested?()
+            return .limitReached
+        }
 
         let entity = SubjectEntity(context: context)
         entity.id = UUID()
@@ -557,7 +563,7 @@ final class SubjectStore: ObservableObject {
     }
 
     func requestProUpgrade() {
-        // Release override: hidden upsell flow.
+        onUpgradeRequested?()
     }
 
     // Hook points for future billing / remote config integrations.
@@ -578,6 +584,10 @@ final class SubjectStore: ObservableObject {
             calculator.$requiredPercentageInput
         )
         .dropFirst()
+        .removeDuplicates { previous, current in
+            previous.0 == current.0 && previous.1 == current.1 && previous.2 == current.2
+        }
+        .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
         .sink { [weak self] total, attended, required in
             self?.persistCalculatorValues(totalInput: total, attendedInput: attended, requiredInput: required)
         }
@@ -592,24 +602,46 @@ final class SubjectStore: ObservableObject {
 
         guard let entity = try? context.fetch(request).first else { return }
 
-        entity.totalClasses = Int32(Int(totalInput) ?? 0)
-        entity.attendedClasses = Int32(Int(attendedInput) ?? 0)
-        entity.requiredPercentage = Double(requiredInput) ?? calculator.defaultRequiredPercentage
+        let totalClasses = Int(totalInput) ?? 0
+        let attendedClasses = Int(attendedInput) ?? 0
+        let requiredPercentage = Double(requiredInput) ?? calculator.defaultRequiredPercentage
+
+        guard entity.totalClasses != Int32(totalClasses)
+            || entity.attendedClasses != Int32(attendedClasses)
+            || entity.requiredPercentage != requiredPercentage
+        else {
+            return
+        }
+
+        entity.totalClasses = Int32(totalClasses)
+        entity.attendedClasses = Int32(attendedClasses)
+        entity.requiredPercentage = requiredPercentage
         entity.updatedAt = Date()
 
         saveContext()
         loadSubjects()
+
+        guard totalInput.isEmpty == false,
+              attendedInput.isEmpty == false,
+              requiredInput.isEmpty == false,
+              totalClasses > 0,
+              attendedClasses <= totalClasses,
+              (0...100).contains(requiredPercentage)
+        else {
+            return
+        }
+
         scheduleNotificationIfNeeded(
             subjectName: entity.name,
-            totalClasses: Int(entity.totalClasses),
-            attendedClasses: Int(entity.attendedClasses),
-            requiredPercentage: entity.requiredPercentage
+            totalClasses: totalClasses,
+            attendedClasses: attendedClasses,
+            requiredPercentage: requiredPercentage
         )
         recordTrendIfNeeded(
             subjectID: selectedID,
-            totalClasses: Int(entity.totalClasses),
-            attendedClasses: Int(entity.attendedClasses),
-            requiredPercentage: entity.requiredPercentage
+            totalClasses: totalClasses,
+            attendedClasses: attendedClasses,
+            requiredPercentage: requiredPercentage
         )
     }
 

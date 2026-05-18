@@ -13,15 +13,20 @@ import UIKit
 
 struct SettingsSheetView: View {
     @ObservedObject var viewModel: AttendanceViewModel
+    @ObservedObject var subjectStore: SubjectStore
     @Environment(\.dismiss) private var dismiss
     @State private var defaultRequiredPercentage: String
     @State private var rateErrorMessage: String?
+    @State private var subscriptionErrorMessage: String?
+    @State private var showPaywall = false
     @AppStorage("feature.notificationsEnabled") private var notificationsEnabled = true
     
     private let appStoreID = "6761951427"
+    private let manageSubscriptionsURL = URL(string: "https://apps.apple.com/account/subscriptions")!
 
-    init(viewModel: AttendanceViewModel) {
+    init(viewModel: AttendanceViewModel, subjectStore: SubjectStore) {
         self.viewModel = viewModel
+        self.subjectStore = subjectStore
         _defaultRequiredPercentage = State(
             initialValue: SettingsSheetView.formattedPercentage(viewModel.defaultRequiredPercentage)
         )
@@ -30,6 +35,28 @@ struct SettingsSheetView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section("Bunk Planner Pro") {
+                    Text(subjectStore.subjectLimitDescription)
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(.secondary)
+
+                    if subjectStore.isProUnlocked == false {
+                        Button {
+                            showPaywall = true
+                        } label: {
+                            Label("Upgrade to Pro", systemImage: "sparkles")
+                        }
+
+                        Text("Pro includes unlimited subjects, trend graphs, forecasts, timetable editor, and faculty dashboard.")
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Button("Manage Subscription") {
+                        openManageSubscriptions()
+                    }
+                }
+
                 Section("Defaults") {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Default Required Attendance (%)")
@@ -59,8 +86,6 @@ struct SettingsSheetView: View {
 
                 Section("Automation") {
                     Toggle("Risk Notifications", isOn: $notificationsEnabled)
-                    // v0.2 (hidden for this release): Upgrade to Pro control
-                    // Toggle("Pro Gating Enabled", isOn: $proGatingEnabled)
                     Text("Risk notifications are local alerts; no backend is used.")
                         .font(.system(size: 12, weight: .medium, design: .rounded))
                         .foregroundStyle(.secondary)
@@ -69,6 +94,10 @@ struct SettingsSheetView: View {
                 Section("Privacy & Support") {
                     NavigationLink("Privacy Policy") {
                         PrivacyPolicyView()
+                    }
+
+                    NavigationLink("Terms of Use") {
+                        TermsOfUseView()
                     }
 
                     VStack(alignment: .leading, spacing: 4) {
@@ -105,12 +134,27 @@ struct SettingsSheetView: View {
             } message: {
                 Text(rateErrorMessage ?? "")
             }
+            .alert("Unable to Open Subscriptions", isPresented: Binding(
+                get: { subscriptionErrorMessage != nil },
+                set: { isPresented in
+                    if isPresented == false {
+                        subscriptionErrorMessage = nil
+                    }
+                }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(subscriptionErrorMessage ?? "")
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") {
                         dismiss()
                     }
                 }
+            }
+            .sheet(isPresented: $showPaywall) {
+                PaywallView()
             }
         }
     }
@@ -162,6 +206,19 @@ struct SettingsSheetView: View {
         #endif
     }
 
+    private func openManageSubscriptions() {
+        #if canImport(UIKit)
+        guard UIApplication.shared.canOpenURL(manageSubscriptionsURL) else {
+            subscriptionErrorMessage = "Subscription settings are not available on this device."
+            return
+        }
+
+        UIApplication.shared.open(manageSubscriptionsURL)
+        #else
+        subscriptionErrorMessage = "Subscription management is available on iOS only."
+        #endif
+    }
+
     private static func formattedPercentage(_ value: Double) -> String {
         let roundedValue = (value * 10).rounded() / 10
         return roundedValue.rounded(.towardZero) == roundedValue
@@ -170,46 +227,10 @@ struct SettingsSheetView: View {
     }
 }
 
-struct PrivacyPolicyView: View {
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                policySection(
-                    title: "Overview",
-                    body: "Bunk Planner: Attendance Track stores your latest attendance inputs and your default attendance target locally on your device using Apple UserDefaults so the app can restore them the next time you open it."
-                )
-                policySection(
-                    title: "Data Handling",
-                    body: "The app does not require an account. Your attendance numbers, subject names, and related preferences you enter are stored on your device (for example in Apple UserDefaults) so the app can work offline and restore your session. The developer does not operate a login backend for this app and does not receive those inputs on our own servers."
-                )
-                policySection(
-                    title: "Notifications",
-                    body: "If you turn on local “risk” reminders, those alerts are scheduled on your device. They are not sent to our servers."
-                )
-                policySection(
-                    title: "Support and Privacy Contact",
-                    body: "For support questions or privacy requests, contact info@schoolabe.com."
-                )
-            }
-            .padding(20)
-        }
-        .navigationTitle("Privacy Policy")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-
-    private func policySection(title: String, body: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.system(size: 17, weight: .bold, design: .rounded))
-
-            Text(body)
-                .font(.system(size: 14, weight: .regular, design: .rounded))
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
 #Preview {
-    SettingsSheetView(viewModel: AttendanceViewModel())
+    SettingsSheetView(
+        viewModel: AttendanceViewModel(),
+        subjectStore: SubjectStore()
+    )
+    .environmentObject(StoreKitManager.shared)
 }

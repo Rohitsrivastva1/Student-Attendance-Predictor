@@ -13,7 +13,6 @@ import UIKit
 
 struct HomeView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @EnvironmentObject var storeKit: StoreKitManager
     @ObservedObject var viewModel: AttendanceViewModel
     @ObservedObject var subjectStore: SubjectStore
     @State private var selectedTab: HomeTab = .home
@@ -23,7 +22,6 @@ struct HomeView: View {
     @State private var editingTimetableSubjectID: UUID?
     @State private var overviewEditingSubjectID: UUID?
     @State private var overviewEditingName = ""
-    @State private var isAnimating = false
     @State private var shareItems: [Any] = []
     @State private var isShowingShareSheet = false
     @State private var isBreakdownExpanded = false
@@ -68,17 +66,13 @@ struct HomeView: View {
         }
     }
 
-    @ViewBuilder
     private func phoneScrollWithFABInset<Content: View>(@ViewBuilder scroll: () -> Content) -> some View {
-        if isRegularWidth {
-            scroll()
-        } else if viewModel.result != nil {
-            scroll().safeAreaInset(edge: .bottom, spacing: 0) {
-                phoneFloatingResultStrip
+        scroll()
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if !isRegularWidth {
+                    phoneFloatingResultStrip
+                }
             }
-        } else {
-            scroll()
-        }
     }
 
     var body: some View {
@@ -111,16 +105,13 @@ struct HomeView: View {
                 }
             }
             .onChange(of: viewModel.totalClassesInput) { _, _ in
-                selectedScenario = .current
+                resetScenarioIfNeeded()
             }
             .onChange(of: viewModel.attendedClassesInput) { _, _ in
-                selectedScenario = .current
+                resetScenarioIfNeeded()
             }
             .onChange(of: viewModel.requiredPercentageInput) { _, _ in
-                selectedScenario = .current
-            }
-            .onAppear {
-                isAnimating = true
+                resetScenarioIfNeeded()
             }
             .onChange(of: viewModel.reviewRequestToken) { _, _ in
                 requestAppReview()
@@ -129,8 +120,11 @@ struct HomeView: View {
                 ActivityView(activityItems: shareItems)
             }
             .sheet(isPresented: $isShowingSettings) {
-                SettingsSheetView(viewModel: viewModel)
+                SettingsSheetView(viewModel: viewModel, subjectStore: subjectStore)
                     .preferredColorScheme(.dark)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .showProUpsellRequested)) { _ in
+                showPaywall = true
             }
             .sheet(isPresented: $isShowingSubjects) {
                 SubjectListView(subjectStore: subjectStore)
@@ -251,7 +245,7 @@ struct HomeView: View {
         .frame(width: 180, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(.ultraThinMaterial)
+                .fill(Color.white.opacity(0.06))
                 .overlay(
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
                         .stroke(Color.white.opacity(0.12), lineWidth: 1)
@@ -274,7 +268,7 @@ struct HomeView: View {
     private var homeTabContent: some View {
         phoneScrollWithFABInset {
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
+                LazyVStack(alignment: .leading, spacing: 24) {
                     headerSection
                     activeSubjectSelectorCard
                     homeHeroSection
@@ -294,8 +288,21 @@ struct HomeView: View {
         phoneScrollWithFABInset {
             ScrollView {
                 VStack(spacing: 24) {
-                    trendGraphCard
-                    subjectForecastCard
+                    ProLockedFeatureCard(
+                        isUnlocked: subjectStore.isProUnlocked,
+                        description: "Track attendance changes over time with the trend graph.",
+                        onUpgrade: { showPaywall = true }
+                    ) {
+                        trendGraphCard
+                    }
+
+                    ProLockedFeatureCard(
+                        isUnlocked: subjectStore.isProUnlocked,
+                        description: "See projected attendance across all subjects.",
+                        onUpgrade: { showPaywall = true }
+                    ) {
+                        subjectForecastCard
+                    }
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 24)
@@ -310,7 +317,14 @@ struct HomeView: View {
         phoneScrollWithFABInset {
             ScrollView {
                 VStack(spacing: 24) {
-                    facultyDashboardCard
+                    ProLockedFeatureCard(
+                        isUnlocked: subjectStore.isProUnlocked,
+                        description: "View multi-subject risk summary and averages.",
+                        onUpgrade: { showPaywall = true }
+                    ) {
+                        facultyDashboardCard
+                    }
+
                     overviewSubjectManagerCard
                 }
                 .padding(.horizontal, 20)
@@ -323,26 +337,16 @@ struct HomeView: View {
     }
     
     private var animatedBackground: some View {
-        ZStack {
-            Color(red: 0.05, green: 0.06, blue: 0.1).ignoresSafeArea()
-            
-            // Floating orbs
-            Circle()
-                .fill(Color(red: 0.1, green: 0.5, blue: 0.9).opacity(0.15))
-                .blur(radius: 60)
-                .frame(width: 300, height: 300)
-                .offset(y: -150)
-                .rotationEffect(.degrees(isAnimating ? 360 : 0))
-                .animation(.linear(duration: 15.0).repeatForever(autoreverses: false), value: isAnimating)
-            
-            Circle()
-                .fill(Color(red: 0.8, green: 0.2, blue: 0.6).opacity(0.12))
-                .blur(radius: 80)
-                .frame(width: 400, height: 400)
-                .offset(y: 150)
-                .rotationEffect(.degrees(isAnimating ? -360 : 0))
-                .animation(.linear(duration: 20.0).repeatForever(autoreverses: false), value: isAnimating)
-        }
+        LinearGradient(
+            colors: [
+                Color(red: 0.05, green: 0.06, blue: 0.10),
+                Color(red: 0.07, green: 0.08, blue: 0.14),
+                Color(red: 0.04, green: 0.07, blue: 0.09)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+        .ignoresSafeArea()
     }
 
     private var headerSection: some View {
@@ -445,7 +449,7 @@ struct HomeView: View {
         .padding(16)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(.ultraThinMaterial)
+                .fill(Color.white.opacity(0.06))
                 .overlay(
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
                         .stroke(Color.white.opacity(0.12), lineWidth: 1)
@@ -466,7 +470,7 @@ struct HomeView: View {
         .padding(20)
         .background(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(.ultraThinMaterial)
+                .fill(Color.white.opacity(0.06))
                 .overlay(
                     RoundedRectangle(cornerRadius: 24, style: .continuous)
                         .stroke(Color.white.opacity(0.15), lineWidth: 1)
@@ -536,15 +540,12 @@ struct HomeView: View {
         }
     }
 
-    private var homeHeroSection: some View {
-        Group {
-            if let result = displayResult {
-                heroCard(for: result)
-                    .animation(.spring(response: 0.4, dampingFraction: 0.8), value: selectedScenario)
-            } else {
-                placeholderSection
-            }
+    private var homeHeroSection: AnyView {
+        guard let result = displayResult else {
+            return AnyView(placeholderSection)
         }
+
+        return AnyView(heroCard(for: result))
     }
 
     private var homeSupportingSection: some View {
@@ -555,7 +556,6 @@ struct HomeView: View {
                     scenarioSection(baseResult: viewModel.result, displayedResult: result)
                     nextClassImpactCard
                 }
-                .animation(.spring(response: 0.4, dampingFraction: 0.8), value: selectedScenario)
             }
         }
     }
@@ -570,9 +570,7 @@ struct HomeView: View {
                 Spacer()
                 Button {
                     triggerLightHaptic()
-                    if subjectStore.subjects.count < 2 || storeKit.hasProAccess {
-                        _ = subjectStore.addSubject()
-                    } else {
+                    if case .limitReached = subjectStore.addSubject() {
                         showPaywall = true
                     }
                 } label: {
@@ -659,8 +657,7 @@ struct HomeView: View {
                             }
 
                             Button("Timetable") {
-                                triggerLightHaptic()
-                                editingTimetableSubjectID = subject.id
+                                openTimetableEditor(for: subject.id)
                             }
                             .font(.system(size: 12, weight: .bold, design: .rounded))
                             .buttonStyle(PressableButtonStyle())
@@ -701,7 +698,7 @@ struct HomeView: View {
         .padding(16)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(.ultraThinMaterial)
+                .fill(Color.white.opacity(0.06))
                 .overlay(
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
                         .stroke(Color.white.opacity(0.12), lineWidth: 1)
@@ -767,7 +764,7 @@ struct HomeView: View {
 
     private var placeholderSection: some View {
         RoundedRectangle(cornerRadius: 24, style: .continuous)
-            .fill(.ultraThinMaterial)
+            .fill(Color.white.opacity(0.06))
             .frame(height: 160)
             .overlay {
                 VStack(spacing: 12) {
@@ -833,10 +830,9 @@ struct HomeView: View {
                 .shadow(color: .white.opacity(0.2), radius: 4, x: 0, y: 2)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text("\(result.currentPercentage, specifier: "%.1f")%")
+            Text(formattedPercentage(result.currentPercentage))
                 .font(.system(size: 36, weight: .black, design: .rounded))
                 .foregroundStyle(primaryStatusColor)
-                .contentTransition(.numericText(value: result.currentPercentage))
 
             Text(heroSubtitle(for: result))
                 .font(.system(size: 16, weight: .medium, design: .rounded))
@@ -849,7 +845,7 @@ struct HomeView: View {
         .padding(24)
         .background(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(.ultraThinMaterial)
+                .fill(Color.white.opacity(0.06))
                 .overlay(
                     RoundedRectangle(cornerRadius: 24, style: .continuous)
                         .stroke(
@@ -967,7 +963,7 @@ struct HomeView: View {
         .padding(16)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(.ultraThinMaterial)
+                .fill(Color.white.opacity(0.06))
                 .overlay(
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
                         .stroke(color.opacity(0.4), lineWidth: 1)
@@ -1010,7 +1006,7 @@ struct HomeView: View {
         .padding(16)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(.ultraThinMaterial)
+                .fill(Color.white.opacity(0.06))
                 .overlay(
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
                         .stroke(Color.white.opacity(0.12), lineWidth: 1)
@@ -1071,7 +1067,7 @@ struct HomeView: View {
         .padding(16)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(.ultraThinMaterial)
+                .fill(Color.white.opacity(0.06))
                 .overlay(
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
                         .stroke(Color.white.opacity(0.12), lineWidth: 1)
@@ -1108,7 +1104,7 @@ struct HomeView: View {
         .padding(16)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(.ultraThinMaterial)
+                .fill(Color.white.opacity(0.06))
                 .overlay(
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
                         .stroke(Color.white.opacity(0.12), lineWidth: 1)
@@ -1150,7 +1146,7 @@ struct HomeView: View {
         .padding(20)
         .background(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(.ultraThinMaterial)
+                .fill(Color.white.opacity(0.06))
                 .overlay(
                     RoundedRectangle(cornerRadius: 24, style: .continuous)
                         .stroke(Color.white.opacity(0.15), lineWidth: 1)
@@ -1160,30 +1156,21 @@ struct HomeView: View {
     }
 
     private func progressBar(for result: AttendanceResult, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            GeometryReader { geometry in
-                let currentWidth = geometry.size.width * min(max(result.currentPercentage / 100, 0), 1)
-                let targetWidth = geometry.size.width * min(max(viewModel.requiredPercentage / 100, 0), 1)
+        let progress = clampedRatio(result.currentPercentage)
 
+        return VStack(alignment: .leading, spacing: 6) {
+            ZStack(alignment: .leading) {
                 Capsule()
                     .fill(Color.black.opacity(0.4))
-                    .overlay(alignment: .leading) {
-                        Capsule()
-                            .fill(color)
-                            .shadow(color: color.opacity(0.4), radius: 4, x: 0, y: 0)
-                            .frame(width: max(20, currentWidth))
-                    }
-                    .overlay(alignment: .leading) {
-                        Rectangle()
-                            .fill(Color.white)
-                            .frame(width: 4, height: 20)
-                            .shadow(color: .white, radius: 4, x: 0, y: 0)
-                            .offset(x: max(0, min(targetWidth, geometry.size.width - 2)))
-                    }
+
+                Capsule()
+                    .fill(color)
+                    .shadow(color: color.opacity(0.4), radius: 4, x: 0, y: 0)
+                    .frame(maxWidth: .infinity)
+                    .scaleEffect(x: max(0.03, progress), y: 1, anchor: .leading)
+
             }
             .frame(height: 12)
-            .animation(.spring(response: 0.4, dampingFraction: 0.7), value: result.currentPercentage)
-            .animation(.spring(response: 0.4, dampingFraction: 0.7), value: viewModel.requiredPercentage)
 
             HStack(spacing: 8) {
                 Text("CURRENT: \(Int(result.currentPercentage.rounded()))%")
@@ -1298,12 +1285,22 @@ struct HomeView: View {
         return "Critical recovery"
     }
 
+    private func formattedPercentage(_ value: Double) -> String {
+        guard value.isFinite else { return "0.0%" }
+        return String(format: "%.1f%%", value)
+    }
+
+    private func clampedRatio(_ percentage: Double) -> CGFloat {
+        guard percentage.isFinite else { return 0 }
+        return CGFloat(min(max(percentage / 100, 0), 1))
+    }
+
     private func gapLabel(for result: AttendanceResult) -> String {
         let gap = max(0, viewModel.requiredPercentage - result.currentPercentage)
         if gap == 0 {
             return "GAP TO TARGET: 0%"
         }
-        return "GAP TO TARGET: \(String(format: "%.1f%%", gap))"
+        return "GAP TO TARGET: \(formattedPercentage(gap))"
     }
 
     private func stepperButton(
@@ -1344,6 +1341,12 @@ struct HomeView: View {
             text.wrappedValue = newValue.rounded(.towardZero) == newValue
                 ? String(Int(newValue))
                 : String(format: "%.1f", newValue)
+        }
+    }
+
+    private func resetScenarioIfNeeded() {
+        if selectedScenario != .current {
+            selectedScenario = .current
         }
     }
 
@@ -1805,12 +1808,21 @@ struct HomeView: View {
         .padding(16)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(.ultraThinMaterial)
+                .fill(Color.white.opacity(0.06))
                 .overlay(
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
                         .stroke(Color.white.opacity(0.12), lineWidth: 1)
                 )
         )
+    }
+
+    private func openTimetableEditor(for subjectID: UUID) {
+        triggerLightHaptic()
+        if subjectStore.isProUnlocked {
+            editingTimetableSubjectID = subjectID
+        } else {
+            showPaywall = true
+        }
     }
 
     private func trendPointsForSelectedSubject() -> [AttendanceTrendPoint] {
@@ -1870,7 +1882,7 @@ struct HomeView: View {
         .padding(16)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(.ultraThinMaterial)
+                .fill(Color.white.opacity(0.06))
                 .overlay(
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
                         .stroke(Color.white.opacity(0.12), lineWidth: 1)
@@ -1906,7 +1918,7 @@ struct HomeView: View {
         .padding(16)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(.ultraThinMaterial)
+                .fill(Color.white.opacity(0.06))
                 .overlay(
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
                         .stroke(Color.white.opacity(0.12), lineWidth: 1)
@@ -2160,9 +2172,8 @@ private extension View {
 private struct PressableButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.94 : 1.0)
-            .opacity(configuration.isPressed ? 0.8 : 1.0)
-            .animation(.spring(response: 0.3, dampingFraction: 0.6), value: configuration.isPressed)
+            .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
+            .opacity(configuration.isPressed ? 0.85 : 1.0)
     }
 }
 
@@ -2179,7 +2190,6 @@ private struct ActivityView: UIViewControllerRepresentable {
 #endif
 
 private struct SubjectListView: View {
-    @EnvironmentObject var storeKit: StoreKitManager
     @ObservedObject var subjectStore: SubjectStore
     @Environment(\.dismiss) private var dismiss
     @State private var isShowingAddPrompt = false
@@ -2225,7 +2235,11 @@ private struct SubjectListView: View {
                         .listRowBackground(Color.white.opacity(0.04))
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             Button("Timetable") {
-                                editingTimetableSubjectID = subject.id
+                                if subjectStore.isProUnlocked {
+                                    editingTimetableSubjectID = subject.id
+                                } else {
+                                    showPaywall = true
+                                }
                             }
                             .tint(.purple)
 
@@ -2246,32 +2260,30 @@ private struct SubjectListView: View {
                     .onDelete(perform: subjectStore.deleteSubjects)
                 }
 
-                // v0.2 (hidden for this release): Plan section
-                // Section("Plan") {
-                //     Text(subjectStore.subjectLimitDescription)
-                //         .font(.system(size: 13, weight: .medium, design: .rounded))
-                //         .foregroundStyle(.white.opacity(0.75))
-                //         .listRowBackground(Color.white.opacity(0.04))
-                //
-                //     // v0.2 (hidden for this release): Upgrade to Pro entry points
-                //     // if subjectStore.isAtSubjectLimit && subjectStore.isProUnlocked == false {
-                //     //     Text("Limit reached: add more subjects with Pro.")
-                //     //         .font(.system(size: 12, weight: .semibold, design: .rounded))
-                //     //         .foregroundStyle(.orange)
-                //     //         .listRowBackground(Color.white.opacity(0.04))
-                //     // }
-                //     //
-                //     // if subjectStore.isProUnlocked == false {
-                //     //     Button {
-                //     //         subjectStore.requestProUpgrade()
-                //     //     } label: {
-                //     //         Label("Upgrade to Pro", systemImage: "sparkles")
-                //     //             .font(.system(size: 14, weight: .bold, design: .rounded))
-                //     //             .foregroundStyle(.white)
-                //     //     }
-                //     //     .listRowBackground(Color.white.opacity(0.04))
-                //     // }
-                // }
+                Section("Plan") {
+                    Text(subjectStore.subjectLimitDescription)
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.75))
+                        .listRowBackground(Color.white.opacity(0.04))
+
+                    if subjectStore.isAtSubjectLimit && subjectStore.isProUnlocked == false {
+                        Text("Limit reached: add more subjects with Pro.")
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.orange)
+                            .listRowBackground(Color.white.opacity(0.04))
+                    }
+
+                    if subjectStore.isProUnlocked == false {
+                        Button {
+                            subjectStore.requestProUpgrade()
+                        } label: {
+                            Label("Upgrade to Pro", systemImage: "sparkles")
+                                .font(.system(size: 14, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white)
+                        }
+                        .listRowBackground(Color.white.opacity(0.04))
+                    }
+                }
             }
             .scrollContentBackground(.hidden)
             .background(Color(red: 0.05, green: 0.06, blue: 0.1))
@@ -2285,8 +2297,12 @@ private struct SubjectListView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        newSubjectName = ""
-                        isShowingAddPrompt = true
+                        if subjectStore.canAddSubject {
+                            newSubjectName = ""
+                            isShowingAddPrompt = true
+                        } else {
+                            showPaywall = true
+                        }
                     } label: {
                         Image(systemName: "plus")
                             .foregroundStyle(Color.white)
@@ -2297,14 +2313,7 @@ private struct SubjectListView: View {
                 TextField("e.g. Math", text: $newSubjectName)
                 Button("Cancel", role: .cancel) {}
                 Button("Add") {
-                    if subjectStore.subjects.count < 2 || storeKit.hasProAccess {
-                        let result = subjectStore.addSubject(named: newSubjectName)
-                        if case .limitReached = result {
-                            // Release override safety: auto-disable gating and retry add.
-                            subjectStore.setProGatingEnabled(false)
-                            _ = subjectStore.addSubject(named: newSubjectName)
-                        }
-                    } else {
+                    if case .limitReached = subjectStore.addSubject(named: newSubjectName) {
                         showPaywall = true
                     }
                 }
@@ -2343,8 +2352,15 @@ private struct SubjectListView: View {
             .sheet(isPresented: $showPaywall) {
                 PaywallView()
             }
+            .onReceive(NotificationCenter.default.publisher(for: .showProUpsellRequested)) { _ in
+                showPaywall = true
+            }
         }
     }
+}
+
+private extension Notification.Name {
+    static let showProUpsellRequested = Notification.Name("showProUpsellRequested")
 }
 
 private struct TimetableEditorSheet: View {
