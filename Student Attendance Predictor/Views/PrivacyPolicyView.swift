@@ -22,17 +22,6 @@ struct PrivacyPolicyView: View {
                 )
 
                 section(
-                    title: "Purchases & Subscriptions",
-                    body: """
-                    Bunk Planner Pro is available as a monthly subscription, annual subscription, or lifetime purchase processed securely by Apple via the App Store. We do not collect, store, or have access to your payment information. All billing is handled entirely by Apple.
-
-                    Subscriptions automatically renew unless cancelled at least 24 hours before the end of the current period. You can manage or cancel your subscription anytime in your Apple ID settings.
-
-                    We do not share any purchase or subscription data with third parties.
-                    """
-                )
-
-                section(
                     title: "Analytics",
                     body: "Bunk Planner does not use third-party analytics SDKs to track your activity."
                 )

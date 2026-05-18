@@ -4,29 +4,21 @@
 //
 
 import SwiftUI
-#if canImport(StoreKit)
-import StoreKit
-#endif
 #if canImport(UIKit)
 import UIKit
 #endif
 
 struct SettingsSheetView: View {
     @ObservedObject var viewModel: AttendanceViewModel
-    @ObservedObject var subjectStore: SubjectStore
     @Environment(\.dismiss) private var dismiss
     @State private var defaultRequiredPercentage: String
     @State private var rateErrorMessage: String?
-    @State private var subscriptionErrorMessage: String?
-    @State private var showPaywall = false
     @AppStorage("feature.notificationsEnabled") private var notificationsEnabled = true
     
     private let appStoreID = "6761951427"
-    private let manageSubscriptionsURL = URL(string: "https://apps.apple.com/account/subscriptions")!
 
-    init(viewModel: AttendanceViewModel, subjectStore: SubjectStore) {
+    init(viewModel: AttendanceViewModel) {
         self.viewModel = viewModel
-        self.subjectStore = subjectStore
         _defaultRequiredPercentage = State(
             initialValue: SettingsSheetView.formattedPercentage(viewModel.defaultRequiredPercentage)
         )
@@ -35,28 +27,6 @@ struct SettingsSheetView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section("Bunk Planner Pro") {
-                    Text(subjectStore.subjectLimitDescription)
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
-                        .foregroundStyle(.secondary)
-
-                    if subjectStore.isProUnlocked == false {
-                        Button {
-                            showPaywall = true
-                        } label: {
-                            Label("Upgrade to Pro", systemImage: "sparkles")
-                        }
-
-                        Text("Pro includes unlimited subjects, trend graphs, forecasts, timetable editor, and faculty dashboard.")
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Button("Manage Subscription") {
-                        openManageSubscriptions()
-                    }
-                }
-
                 Section("Defaults") {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Default Required Attendance (%)")
@@ -134,27 +104,12 @@ struct SettingsSheetView: View {
             } message: {
                 Text(rateErrorMessage ?? "")
             }
-            .alert("Unable to Open Subscriptions", isPresented: Binding(
-                get: { subscriptionErrorMessage != nil },
-                set: { isPresented in
-                    if isPresented == false {
-                        subscriptionErrorMessage = nil
-                    }
-                }
-            )) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(subscriptionErrorMessage ?? "")
-            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") {
                         dismiss()
                     }
                 }
-            }
-            .sheet(isPresented: $showPaywall) {
-                PaywallView()
             }
         }
     }
@@ -206,19 +161,6 @@ struct SettingsSheetView: View {
         #endif
     }
 
-    private func openManageSubscriptions() {
-        #if canImport(UIKit)
-        guard UIApplication.shared.canOpenURL(manageSubscriptionsURL) else {
-            subscriptionErrorMessage = "Subscription settings are not available on this device."
-            return
-        }
-
-        UIApplication.shared.open(manageSubscriptionsURL)
-        #else
-        subscriptionErrorMessage = "Subscription management is available on iOS only."
-        #endif
-    }
-
     private static func formattedPercentage(_ value: Double) -> String {
         let roundedValue = (value * 10).rounded() / 10
         return roundedValue.rounded(.towardZero) == roundedValue
@@ -228,9 +170,5 @@ struct SettingsSheetView: View {
 }
 
 #Preview {
-    SettingsSheetView(
-        viewModel: AttendanceViewModel(),
-        subjectStore: SubjectStore()
-    )
-    .environmentObject(StoreKitManager.shared)
+    SettingsSheetView(viewModel: AttendanceViewModel())
 }

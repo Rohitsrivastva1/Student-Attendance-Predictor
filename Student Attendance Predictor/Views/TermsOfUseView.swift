@@ -12,28 +12,18 @@ struct TermsOfUseView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 section(
-                    title: "Subscriptions",
-                    body: "Paid plans are billed through your Apple ID account and renew automatically unless canceled before the end of the current billing period."
+                    title: "App Use",
+                    body: "Bunk Planner helps you track attendance, run what-if scenarios, view trends and forecasts, manage subjects, and set weekly timetables. All data stays on your device unless you choose to share it."
                 )
 
                 section(
-                    title: "Cancellation",
-                    body: "You can manage or cancel subscriptions anytime in your App Store account settings on iPhone."
-                )
-
-                section(
-                    title: "Free Tier",
-                    body: "The free plan includes up to 2 subjects, attendance calculator, scenario simulator, risk alerts, and local notifications."
-                )
-
-                section(
-                    title: "Pro Tier",
-                    body: "Pro unlocks unlimited subjects, attendance trend graphs, subject-wise forecasts, weekly timetable editor, and the faculty/admin dashboard."
+                    title: "Features",
+                    body: "The app includes unlimited subjects, attendance calculator, scenario simulator, trend graphs, subject forecasts, timetable editor, faculty dashboard, risk alerts, and local notifications."
                 )
 
                 section(
                     title: "Contact",
-                    body: "For billing or terms questions, contact info@schoolabe.com."
+                    body: "For support or terms questions, contact info@schoolabe.com."
                 )
             }
             .padding(20)

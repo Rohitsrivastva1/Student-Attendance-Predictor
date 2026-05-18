@@ -253,16 +253,7 @@ final class AttendanceViewModel: ObservableObject {
 
 @MainActor
 final class SubjectStore: ObservableObject {
-    static let freeSubjectLimit = 2
-
-    enum AddSubjectResult {
-        case added
-        case limitReached
-    }
-
     @Published private(set) var subjects: [SubjectSummary] = []
-    @Published private(set) var isProUnlocked: Bool
-    @Published private(set) var isProGatingEnabled: Bool
     @Published var selectedSubjectID: UUID? {
         didSet {
             guard selectedSubjectID != oldValue else { return }
@@ -295,31 +286,12 @@ final class SubjectStore: ObservableObject {
         )
     }
 
-    var subjectLimitDescription: String {
-        if isProUnlocked {
-            return "Pro plan: unlimited subjects enabled."
-        }
-        if isProGatingEnabled {
-            return "Free plan allows up to \(Self.freeSubjectLimit) subjects."
-        }
-        return "Unlimited subjects enabled."
-    }
-
-    var isAtSubjectLimit: Bool {
-        canAddSubject == false
-    }
-
-    var canAddSubject: Bool {
-        subjects.count < effectiveSubjectLimit
-    }
-
     private var selectedSubject: SubjectSummary? {
         subjects.first(where: { $0.id == selectedSubjectID })
     }
 
     private let defaults: UserDefaults
     private let context: NSManagedObjectContext
-    private let onUpgradeRequested: (() -> Void)?
     private var cancellables = Set<AnyCancellable>()
 
     private enum Keys {
@@ -328,36 +300,21 @@ final class SubjectStore: ObservableObject {
         static let legacyTotalClasses = "attendance.totalClasses"
         static let legacyAttendedClasses = "attendance.attendedClasses"
         static let legacyRequiredPercentage = "attendance.requiredPercentage"
-        static let proUnlocked = "billing.proUnlocked"
-        static let proGatingEnabled = "feature.proGatingEnabled"
         static let notificationsEnabled = "feature.notificationsEnabled"
-    }
-
-    private var effectiveSubjectLimit: Int {
-        (isProGatingEnabled && isProUnlocked == false) ? Self.freeSubjectLimit : Int.max
     }
 
     init(
         defaults: UserDefaults = .standard,
-        context: NSManagedObjectContext? = nil,
-        onUpgradeRequested: (() -> Void)? = nil
+        context: NSManagedObjectContext? = nil
     ) {
         self.defaults = defaults
         self.context = context ?? PersistenceController.shared.container.viewContext
-        self.onUpgradeRequested = onUpgradeRequested
         self.calculator = AttendanceViewModel(defaults: defaults)
-        self.isProUnlocked = defaults.bool(forKey: Keys.proUnlocked)
-        if defaults.object(forKey: Keys.proGatingEnabled) != nil {
-            self.isProGatingEnabled = defaults.bool(forKey: Keys.proGatingEnabled)
-        } else {
-            self.isProGatingEnabled = true
-            defaults.set(true, forKey: Keys.proGatingEnabled)
-        }
 
-        loadSubjects()
+        reloadSubjects()
         migrateLegacyUserDefaultsIfNeeded()
         ensureAtLeastOneSubject()
-        loadSubjects()
+        reloadSubjects()
 
         let storedSelectedID = defaults.string(forKey: Keys.selectedSubjectID).flatMap(UUID.init(uuidString:))
         if let storedSelectedID, subjects.contains(where: { $0.id == storedSelectedID }) {
@@ -367,16 +324,17 @@ final class SubjectStore: ObservableObject {
         }
         loadSelectedSubjectIntoCalculator()
         bindCalculatorChanges()
-        NotificationService.requestAuthorizationIfNeeded()
-        NotificationService.scheduleClassReminder()
     }
 
-    func addSubject(named customName: String? = nil) -> AddSubjectResult {
-        guard canAddSubject else {
-            onUpgradeRequested?()
-            return .limitReached
+    /// Notification setup is deferred so first paint is not blocked on launch.
+    func performDeferredLaunchTasks() {
+        Task.detached(priority: .utility) {
+            NotificationService.requestAuthorizationIfNeeded()
+            NotificationService.scheduleClassReminder()
         }
+    }
 
+    func addSubject(named customName: String? = nil) {
         let entity = SubjectEntity(context: context)
         entity.id = UUID()
         entity.name = validatedSubjectName(customName) ?? nextSubjectName()
@@ -388,9 +346,8 @@ final class SubjectStore: ObservableObject {
         entity.updatedAt = Date()
 
         saveContext()
-        loadSubjects()
+        reloadSubjects()
         selectedSubjectID = entity.id
-        return .added
     }
 
     func deleteSubjects(at offsets: IndexSet) {
@@ -403,7 +360,7 @@ final class SubjectStore: ObservableObject {
         if let entities = try? context.fetch(request) {
             entities.forEach(context.delete)
             saveContext()
-            loadSubjects()
+            reloadSubjects()
 
             if let currentID = selectedSubjectID, subjects.contains(where: { $0.id == currentID }) == false {
                 selectedSubjectID = subjects.first?.id
@@ -421,7 +378,7 @@ final class SubjectStore: ObservableObject {
         if let entity = try? context.fetch(request).first {
             context.delete(entity)
             saveContext()
-            loadSubjects()
+            reloadSubjects()
 
             if let currentID = selectedSubjectID, currentID == id {
                 selectedSubjectID = subjects.first?.id
@@ -449,7 +406,7 @@ final class SubjectStore: ObservableObject {
         entity.name = cleanedName
         entity.updatedAt = Date()
         saveContext()
-        loadSubjects()
+        reloadSubjects()
     }
 
     func weeklySchedule(for subjectID: UUID) -> WeeklySchedule {
@@ -468,7 +425,7 @@ final class SubjectStore: ObservableObject {
         entity.scheduleData = Self.encodeSchedule(schedule)
         entity.updatedAt = Date()
         saveContext()
-        loadSubjects()
+        reloadSubjects()
     }
 
     func applyWeeklySchedule(for subjectID: UUID, addToExisting: Bool) {
@@ -488,7 +445,7 @@ final class SubjectStore: ObservableObject {
         }
         entity.updatedAt = Date()
         saveContext()
-        loadSubjects()
+        reloadSubjects()
 
         if selectedSubjectID == subjectID {
             loadSelectedSubjectIntoCalculator()
@@ -528,7 +485,7 @@ final class SubjectStore: ObservableObject {
 
         entity.updatedAt = Date()
         saveContext()
-        loadSubjects()
+        reloadSubjects()
 
         if selectedSubjectID == subjectID {
             loadSelectedSubjectIntoCalculator()
@@ -560,21 +517,6 @@ final class SubjectStore: ObservableObject {
             )
         }
         .sorted { $0.subjectName.localizedCaseInsensitiveCompare($1.subjectName) == .orderedAscending }
-    }
-
-    func requestProUpgrade() {
-        onUpgradeRequested?()
-    }
-
-    // Hook points for future billing / remote config integrations.
-    func setProUnlocked(_ unlocked: Bool) {
-        isProUnlocked = unlocked
-        defaults.set(unlocked, forKey: Keys.proUnlocked)
-    }
-
-    func setProGatingEnabled(_ enabled: Bool) {
-        isProGatingEnabled = enabled
-        defaults.set(enabled, forKey: Keys.proGatingEnabled)
     }
 
     private func bindCalculatorChanges() {
@@ -619,7 +561,7 @@ final class SubjectStore: ObservableObject {
         entity.updatedAt = Date()
 
         saveContext()
-        loadSubjects()
+        reloadSubjects()
 
         guard totalInput.isEmpty == false,
               attendedInput.isEmpty == false,
@@ -654,9 +596,10 @@ final class SubjectStore: ObservableObject {
         )
     }
 
-    private func loadSubjects() {
+    private func reloadSubjects() {
         let request = SubjectEntity.fetchRequest()
         request.sortDescriptors = [NSSortDescriptor(key: "createdAt", ascending: true)]
+        request.returnsObjectsAsFaults = true
 
         let fetched = (try? context.fetch(request)) ?? []
         subjects = fetched.map {
@@ -824,6 +767,8 @@ final class PersistenceController {
     static let shared = PersistenceController()
 
     let container: NSPersistentContainer
+    private(set) var isStoreLoaded = false
+    private var storeLoadContinuations: [CheckedContinuation<Void, Never>] = []
 
     private init() {
         let model = Self.makeModel()
@@ -832,12 +777,29 @@ final class PersistenceController {
             description.shouldMigrateStoreAutomatically = true
             description.shouldInferMappingModelAutomatically = true
         }
-        container.loadPersistentStores { _, error in
+        container.loadPersistentStores { [weak self] _, error in
             if let error {
                 fatalError("Core Data store failed: \(error)")
             }
+            guard let self else { return }
+            self.isStoreLoaded = true
+            let waiters = self.storeLoadContinuations
+            self.storeLoadContinuations.removeAll()
+            waiters.forEach { $0.resume() }
         }
         container.viewContext.automaticallyMergesChangesFromParent = true
+        container.viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+    }
+
+    func waitForStoreIfNeeded() async {
+        if isStoreLoaded { return }
+        await withCheckedContinuation { continuation in
+            if isStoreLoaded {
+                continuation.resume()
+            } else {
+                storeLoadContinuations.append(continuation)
+            }
+        }
     }
 
     private static func makeModel() -> NSManagedObjectModel {

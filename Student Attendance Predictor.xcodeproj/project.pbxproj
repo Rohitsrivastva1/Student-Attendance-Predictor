@@ -6,12 +6,7 @@
 	objectVersion = 77;
 	objects = {
 
-/* Begin PBXBuildFile section */
-		2737586E2FB8F92400861DE0 /* BunkPlanner.storekit in Resources */ = {isa = PBXBuildFile; fileRef = 2737586D2FB8F92400861DE0 /* BunkPlanner.storekit */; };
-/* End PBXBuildFile section */
-
 /* Begin PBXFileReference section */
-		2737586D2FB8F92400861DE0 /* BunkPlanner.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; path = BunkPlanner.storekit; sourceTree = "<group>"; };
 		277880232F7EDD080091469C /* Student Attendance Predictor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Student Attendance Predictor.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -37,7 +32,6 @@
 		2778801A2F7EDD080091469C = {
 			isa = PBXGroup;
 			children = (
-				2737586D2FB8F92400861DE0 /* BunkPlanner.storekit */,
 				277880252F7EDD080091469C /* Student Attendance Predictor */,
 				277880242F7EDD080091469C /* Products */,
 			);
@@ -117,7 +111,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				2737586E2FB8F92400861DE0 /* BunkPlanner.storekit in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -9,12 +9,14 @@ import SwiftUI
 
 @main
 struct Student_Attendance_PredictorApp: App {
-    @StateObject private var storeKit = StoreKitManager.shared
+    init() {
+        // Begin Core Data store load before the first view needs it.
+        _ = PersistenceController.shared
+    }
 
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .environmentObject(storeKit)
         }
     }
 }

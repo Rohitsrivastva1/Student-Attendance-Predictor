@@ -30,7 +30,6 @@ struct HomeView: View {
     @State private var forecastWeeks = 1
     @State private var forecastHolidayClasses = 0
     @State private var forecastExpectedAbsences = 0
-    @State private var showPaywall = false
     
     private var isRegularWidth: Bool {
         horizontalSizeClass == .regular
@@ -120,18 +119,12 @@ struct HomeView: View {
                 ActivityView(activityItems: shareItems)
             }
             .sheet(isPresented: $isShowingSettings) {
-                SettingsSheetView(viewModel: viewModel, subjectStore: subjectStore)
+                SettingsSheetView(viewModel: viewModel)
                     .preferredColorScheme(.dark)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .showProUpsellRequested)) { _ in
-                showPaywall = true
             }
             .sheet(isPresented: $isShowingSubjects) {
                 SubjectListView(subjectStore: subjectStore)
                     .preferredColorScheme(.dark)
-            }
-            .sheet(isPresented: $showPaywall) {
-                PaywallView()
             }
             .sheet(
                 isPresented: Binding(
@@ -163,26 +156,47 @@ struct HomeView: View {
     }
     
     private var phoneTabContainer: some View {
-        TabView(selection: $selectedTab) {
-            homeTabContent
-                .tag(HomeTab.home)
-                .tabItem {
-                    Label("Home", systemImage: "house.fill")
+        VStack(spacing: 0) {
+            Group {
+                switch selectedTab {
+                case .home:
+                    homeTabContent
+                case .insights:
+                    insightsTabContent
+                case .overview:
+                    overviewTabContent
                 }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            insightsTabContent
-                .tag(HomeTab.insights)
-                .tabItem {
-                    Label("Insights", systemImage: "chart.line.uptrend.xyaxis")
-                }
-
-            overviewTabContent
-                .tag(HomeTab.overview)
-                .tabItem {
-                    Label("Overview", systemImage: "books.vertical.fill")
-                }
+            phoneTabBar
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var phoneTabBar: some View {
+        HStack(spacing: 0) {
+            ForEach(HomeTab.allCases, id: \.self) { tab in
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        selectedTab = tab
+                    }
+                } label: {
+                    VStack(spacing: 4) {
+                        Image(systemName: tab.systemImage)
+                            .font(.system(size: 18, weight: .semibold))
+                        Text(tab.title)
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    }
+                    .foregroundStyle(selectedTab == tab ? Color.white : Color.white.opacity(0.45))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.bottom, 4)
+        .background(Color(red: 0.05, green: 0.06, blue: 0.1))
     }
     
     private var ipadTabContainer: some View {
@@ -288,21 +302,8 @@ struct HomeView: View {
         phoneScrollWithFABInset {
             ScrollView {
                 VStack(spacing: 24) {
-                    ProLockedFeatureCard(
-                        isUnlocked: subjectStore.isProUnlocked,
-                        description: "Track attendance changes over time with the trend graph.",
-                        onUpgrade: { showPaywall = true }
-                    ) {
-                        trendGraphCard
-                    }
-
-                    ProLockedFeatureCard(
-                        isUnlocked: subjectStore.isProUnlocked,
-                        description: "See projected attendance across all subjects.",
-                        onUpgrade: { showPaywall = true }
-                    ) {
-                        subjectForecastCard
-                    }
+                    trendGraphCard
+                    subjectForecastCard
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 24)
@@ -317,14 +318,7 @@ struct HomeView: View {
         phoneScrollWithFABInset {
             ScrollView {
                 VStack(spacing: 24) {
-                    ProLockedFeatureCard(
-                        isUnlocked: subjectStore.isProUnlocked,
-                        description: "View multi-subject risk summary and averages.",
-                        onUpgrade: { showPaywall = true }
-                    ) {
-                        facultyDashboardCard
-                    }
-
+                    facultyDashboardCard
                     overviewSubjectManagerCard
                 }
                 .padding(.horizontal, 20)
@@ -570,9 +564,7 @@ struct HomeView: View {
                 Spacer()
                 Button {
                     triggerLightHaptic()
-                    if case .limitReached = subjectStore.addSubject() {
-                        showPaywall = true
-                    }
+                    subjectStore.addSubject()
                 } label: {
                     Label("Add", systemImage: "plus")
                         .font(.system(size: 12, weight: .bold, design: .rounded))
@@ -1818,11 +1810,7 @@ struct HomeView: View {
 
     private func openTimetableEditor(for subjectID: UUID) {
         triggerLightHaptic()
-        if subjectStore.isProUnlocked {
-            editingTimetableSubjectID = subjectID
-        } else {
-            showPaywall = true
-        }
+        editingTimetableSubjectID = subjectID
     }
 
     private func trendPointsForSelectedSubject() -> [AttendanceTrendPoint] {
@@ -2198,7 +2186,6 @@ private struct SubjectListView: View {
     @State private var renameSubjectName = ""
     @State private var renamingSubjectID: UUID?
     @State private var editingTimetableSubjectID: UUID?
-    @State private var showPaywall = false
 
     var body: some View {
         NavigationStack {
@@ -2235,11 +2222,7 @@ private struct SubjectListView: View {
                         .listRowBackground(Color.white.opacity(0.04))
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             Button("Timetable") {
-                                if subjectStore.isProUnlocked {
-                                    editingTimetableSubjectID = subject.id
-                                } else {
-                                    showPaywall = true
-                                }
+                                editingTimetableSubjectID = subject.id
                             }
                             .tint(.purple)
 
@@ -2260,30 +2243,6 @@ private struct SubjectListView: View {
                     .onDelete(perform: subjectStore.deleteSubjects)
                 }
 
-                Section("Plan") {
-                    Text(subjectStore.subjectLimitDescription)
-                        .font(.system(size: 13, weight: .medium, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.75))
-                        .listRowBackground(Color.white.opacity(0.04))
-
-                    if subjectStore.isAtSubjectLimit && subjectStore.isProUnlocked == false {
-                        Text("Limit reached: add more subjects with Pro.")
-                            .font(.system(size: 12, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.orange)
-                            .listRowBackground(Color.white.opacity(0.04))
-                    }
-
-                    if subjectStore.isProUnlocked == false {
-                        Button {
-                            subjectStore.requestProUpgrade()
-                        } label: {
-                            Label("Upgrade to Pro", systemImage: "sparkles")
-                                .font(.system(size: 14, weight: .bold, design: .rounded))
-                                .foregroundStyle(.white)
-                        }
-                        .listRowBackground(Color.white.opacity(0.04))
-                    }
-                }
             }
             .scrollContentBackground(.hidden)
             .background(Color(red: 0.05, green: 0.06, blue: 0.1))
@@ -2297,12 +2256,8 @@ private struct SubjectListView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        if subjectStore.canAddSubject {
-                            newSubjectName = ""
-                            isShowingAddPrompt = true
-                        } else {
-                            showPaywall = true
-                        }
+                        newSubjectName = ""
+                        isShowingAddPrompt = true
                     } label: {
                         Image(systemName: "plus")
                             .foregroundStyle(Color.white)
@@ -2313,9 +2268,7 @@ private struct SubjectListView: View {
                 TextField("e.g. Math", text: $newSubjectName)
                 Button("Cancel", role: .cancel) {}
                 Button("Add") {
-                    if case .limitReached = subjectStore.addSubject(named: newSubjectName) {
-                        showPaywall = true
-                    }
+                    subjectStore.addSubject(named: newSubjectName)
                 }
             } message: {
                 Text("Type a subject name or leave blank to auto-name.")
@@ -2349,18 +2302,8 @@ private struct SubjectListView: View {
                     .preferredColorScheme(.dark)
                 }
             }
-            .sheet(isPresented: $showPaywall) {
-                PaywallView()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .showProUpsellRequested)) { _ in
-                showPaywall = true
-            }
         }
     }
-}
-
-private extension Notification.Name {
-    static let showProUpsellRequested = Notification.Name("showProUpsellRequested")
 }
 
 private struct TimetableEditorSheet: View {
