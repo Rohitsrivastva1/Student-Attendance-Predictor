@@ -32,6 +32,8 @@ struct ContentView: View {
             let store = SubjectStore()
             store.performDeferredLaunchTasks()
             subjectStore = store
+            // Consent form needs a window; gather before native ads load.
+            AdMobService.startIfNeeded()
         }
     }
 }

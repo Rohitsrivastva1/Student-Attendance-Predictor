@@ -287,6 +287,7 @@ struct HomeView: View {
                     activeSubjectSelectorCard
                     homeHeroSection
                     inputSection
+                    AdMobNativeCard(placement: "home-total-classes")
                     homeSupportingSection
                 }
                 .padding(.horizontal, 20)
@@ -303,6 +304,7 @@ struct HomeView: View {
             ScrollView {
                 VStack(spacing: 24) {
                     trendGraphCard
+                    AdMobNativeCard(placement: "insights-trend-forecast")
                     subjectForecastCard
                 }
                 .padding(.horizontal, 20)
@@ -319,6 +321,7 @@ struct HomeView: View {
             ScrollView {
                 VStack(spacing: 24) {
                     facultyDashboardCard
+                    AdMobNativeCard(placement: "overview-dashboard-subjects")
                     overviewSubjectManagerCard
                 }
                 .padding(.horizontal, 20)

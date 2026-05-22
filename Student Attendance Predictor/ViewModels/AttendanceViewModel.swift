@@ -14,9 +14,7 @@ final class AttendanceViewModel: ObservableObject {
             let sanitized = sanitizeIntegerInput(totalClassesInput)
             if totalClassesInput != sanitized {
                 totalClassesInput = sanitized
-                return
             }
-            calculate()
         }
     }
     @Published var attendedClassesInput: String {
@@ -24,9 +22,7 @@ final class AttendanceViewModel: ObservableObject {
             let sanitized = sanitizeIntegerInput(attendedClassesInput)
             if attendedClassesInput != sanitized {
                 attendedClassesInput = sanitized
-                return
             }
-            calculate()
         }
     }
     @Published var requiredPercentageInput: String {
@@ -34,9 +30,7 @@ final class AttendanceViewModel: ObservableObject {
             let sanitized = sanitizePercentageInput(requiredPercentageInput)
             if requiredPercentageInput != sanitized {
                 requiredPercentageInput = sanitized
-                return
             }
-            calculate()
         }
     }
     @Published private(set) var result: AttendanceResult?
@@ -44,8 +38,10 @@ final class AttendanceViewModel: ObservableObject {
     @Published private(set) var reviewRequestToken: Int = 0
 
     private let defaults: UserDefaults
+    private var cancellables = Set<AnyCancellable>()
     private var lastSafeCountSignature: String?
     private var suppressReviewTracking = false
+    private var isApplyingSubjectLoad = false
 
     private enum Keys {
         static let defaultRequiredPercentage = "attendance.defaultRequiredPercentage"
@@ -59,7 +55,26 @@ final class AttendanceViewModel: ObservableObject {
         self.totalClassesInput = ""
         self.attendedClassesInput = ""
         self.requiredPercentageInput = defaultRequired
+        bindDebouncedCalculation()
         calculate()
+    }
+
+    private func bindDebouncedCalculation() {
+        Publishers.CombineLatest3(
+            $totalClassesInput,
+            $attendedClassesInput,
+            $requiredPercentageInput
+        )
+        .dropFirst()
+        .removeDuplicates { previous, current in
+            previous.0 == current.0 && previous.1 == current.1 && previous.2 == current.2
+        }
+        .debounce(for: .milliseconds(150), scheduler: RunLoop.main)
+        .sink { [weak self] _, _, _ in
+            guard let self, !self.isApplyingSubjectLoad else { return }
+            self.calculate()
+        }
+        .store(in: &cancellables)
     }
 
     var totalClasses: Int { Int(totalClassesInput) ?? 0 }
@@ -113,10 +128,12 @@ final class AttendanceViewModel: ObservableObject {
 
     func loadSubject(totalClasses: Int, attendedClasses: Int, requiredPercentage: Double) {
         suppressReviewTracking = true
+        isApplyingSubjectLoad = true
         totalClassesInput = totalClasses > 0 ? String(totalClasses) : ""
         attendedClassesInput = attendedClasses > 0 ? String(attendedClasses) : ""
         requiredPercentageInput = Self.formattedPercentageString(for: min(max(requiredPercentage, 0), 100))
         validationMessage = nil
+        isApplyingSubjectLoad = false
         suppressReviewTracking = false
         calculate()
     }
@@ -328,7 +345,7 @@ final class SubjectStore: ObservableObject {
 
     /// Notification setup is deferred so first paint is not blocked on launch.
     func performDeferredLaunchTasks() {
-        Task.detached(priority: .utility) {
+        Task(priority: .utility) { @MainActor in
             NotificationService.requestAuthorizationIfNeeded()
             NotificationService.scheduleClassReminder()
         }
@@ -561,7 +578,7 @@ final class SubjectStore: ObservableObject {
         entity.updatedAt = Date()
 
         saveContext()
-        reloadSubjects()
+        replaceSubjectInList(with: entity)
 
         guard totalInput.isEmpty == false,
               attendedInput.isEmpty == false,
@@ -602,17 +619,29 @@ final class SubjectStore: ObservableObject {
         request.returnsObjectsAsFaults = true
 
         let fetched = (try? context.fetch(request)) ?? []
-        subjects = fetched.map {
-            SubjectSummary(
-                id: $0.id,
-                name: $0.name,
-                totalClasses: Int($0.totalClasses),
-                attendedClasses: Int($0.attendedClasses),
-                requiredPercentage: $0.requiredPercentage,
-                weeklySchedule: Self.decodeSchedule($0.scheduleData),
-                createdAt: $0.createdAt
-            )
+        subjects = fetched.map(subjectSummary(from:))
+    }
+
+    private func replaceSubjectInList(with entity: SubjectEntity) {
+        let updated = subjectSummary(from: entity)
+        guard let index = subjects.firstIndex(where: { $0.id == updated.id }) else {
+            reloadSubjects()
+            return
         }
+        guard subjects[index] != updated else { return }
+        subjects[index] = updated
+    }
+
+    private func subjectSummary(from entity: SubjectEntity) -> SubjectSummary {
+        SubjectSummary(
+            id: entity.id,
+            name: entity.name,
+            totalClasses: Int(entity.totalClasses),
+            attendedClasses: Int(entity.attendedClasses),
+            requiredPercentage: entity.requiredPercentage,
+            weeklySchedule: Self.decodeSchedule(entity.scheduleData),
+            createdAt: entity.createdAt
+        )
     }
 
     private func ensureAtLeastOneSubject() {

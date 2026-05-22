@@ -13,17 +13,37 @@ struct PrivacyPolicyView: View {
             VStack(alignment: .leading, spacing: 14) {
                 section(
                     title: "Overview",
-                    body: "Bunk Planner stores your subject and attendance information locally on your device. No attendance data is sent to SchoolAbe servers."
+                    body: "Bunk Planner helps you plan attendance and bunk safely. Your subject names, attendance numbers, and forecasts are stored on your device. SchoolAbe does not operate a server that receives your attendance records."
                 )
 
                 section(
                     title: "Local Data Storage",
-                    body: "The app uses Core Data and local device storage to save your subjects, attendance stats, and app settings."
+                    body: "The app uses Core Data, UserDefaults, and on-device storage for subjects, attendance history, trends, default settings, and notification preferences. This data stays on your iPhone or iPad unless you back up the device through Apple."
                 )
 
                 section(
-                    title: "Analytics",
-                    body: "Bunk Planner does not use third-party analytics SDKs to track your activity."
+                    title: "Advertising",
+                    body: "Bunk Planner is free and supported by ads from Google AdMob. Ads may appear as labeled “Ad” cards in the app. Google may collect device and ad interaction data to deliver and measure ads. We do not sell your attendance data to advertisers."
+                )
+
+                section(
+                    title: "App Tracking Transparency",
+                    body: "On supported iOS versions, Apple may ask whether Bunk Planner can track you across other companies’ apps and websites for advertising. If you allow tracking, ads may be more personalized. If you decline, the app works the same and ads are less personalized (contextual ads). You can change this anytime in Settings → Privacy & Security → Tracking."
+                )
+
+                section(
+                    title: "Ad Privacy & Consent",
+                    body: "Where required by law (for example in the EEA/UK), Google’s consent tools may ask about personalized ads and cookies before ads load. You can review or change ad privacy choices later in Bunk Planner Settings when “Ad Privacy Choices” is shown, or through your device privacy settings."
+                )
+
+                section(
+                    title: "Notifications",
+                    body: "Optional local reminders (attendance alerts, class reminders) are scheduled on your device only. They do not upload your data to SchoolAbe or third-party servers."
+                )
+
+                section(
+                    title: "What We Do Not Collect",
+                    body: "We do not use separate analytics SDKs to profile how you use the calculator. We do not require tracking permission to use attendance planning, subject management, or core app features."
                 )
 
                 section(

@@ -13,6 +13,8 @@ struct SettingsSheetView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var defaultRequiredPercentage: String
     @State private var rateErrorMessage: String?
+    @State private var adPrivacyErrorMessage: String?
+    @State private var showAdPrivacyChoices = false
     @AppStorage("feature.notificationsEnabled") private var notificationsEnabled = true
     
     private let appStoreID = "6761951427"
@@ -62,6 +64,16 @@ struct SettingsSheetView: View {
                 }
 
                 Section("Privacy & Support") {
+                    if showAdPrivacyChoices {
+                        Button("Ad Privacy Choices") {
+                            openAdPrivacyChoices()
+                        }
+
+                        Text("Manage whether ads can be personalized based on your activity.")
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(.secondary)
+                    }
+
                     NavigationLink("Privacy Policy") {
                         PrivacyPolicyView()
                     }
@@ -92,6 +104,21 @@ struct SettingsSheetView: View {
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear {
+                showAdPrivacyChoices = AdMobConsentService.isPrivacyOptionsRequired
+            }
+            .alert("Ad Privacy", isPresented: Binding(
+                get: { adPrivacyErrorMessage != nil },
+                set: { isPresented in
+                    if isPresented == false {
+                        adPrivacyErrorMessage = nil
+                    }
+                }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(adPrivacyErrorMessage ?? "")
+            }
             .alert("Unable to Open App Store", isPresented: Binding(
                 get: { rateErrorMessage != nil },
                 set: { isPresented in
@@ -143,6 +170,16 @@ struct SettingsSheetView: View {
         return result
     }
     
+    private func openAdPrivacyChoices() {
+        Task { @MainActor in
+            do {
+                try await AdMobConsentService.presentPrivacyOptions()
+            } catch {
+                adPrivacyErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
     private func openRateUsFlow() {
         #if canImport(UIKit)
         guard let url = URL(string: "itms-apps://itunes.apple.com/app/id\(appStoreID)?action=write-review") else {
