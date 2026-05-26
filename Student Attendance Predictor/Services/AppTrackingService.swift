@@ -9,6 +9,9 @@ import Foundation
 #if canImport(AppTrackingTransparency)
 import AppTrackingTransparency
 #endif
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// Result of the system ATT prompt (or current status if already decided).
 enum TrackingAuthorization: Sendable, Equatable {
@@ -18,7 +21,7 @@ enum TrackingAuthorization: Sendable, Equatable {
     case denied
     /// Tracking restricted by device policy (e.g. parental controls).
     case restricted
-    /// Prompt not shown yet (transient until `requestAuthorizationIfNeeded()` finishes).
+    /// Prompt not shown yet (transient until `requestTrackingPermission()` finishes).
     case notDetermined
 }
 
@@ -31,34 +34,37 @@ enum AppTrackingService {
         authorization == .authorized
     }
 
-    /// Call once per launch, before UMP or `MobileAds.shared.start()`.
-    static func requestAuthorizationIfNeeded() async {
+    /// Requests ATT once the root UI is on-screen, then returns the resolved status.
+    static func requestTrackingPermission(
+        delay: TimeInterval = 0.75,
+        completion: @escaping (TrackingAuthorization) -> Void
+    ) {
         #if canImport(AppTrackingTransparency)
         if #available(iOS 14, *) {
             let current = ATTrackingManager.trackingAuthorizationStatus
-            if current == .notDetermined {
-                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                    ATTrackingManager.requestTrackingAuthorization { status in
-                        Task { @MainActor in
-                            authorization = map(status)
-                            #if DEBUG
-                            print("[ATT] User responded: \(authorization)")
-                            #endif
-                            continuation.resume()
-                        }
-                    }
-                }
-            } else {
-                authorization = map(current)
-                #if DEBUG
-                print("[ATT] Existing status: \(authorization)")
-                #endif
+            switch current {
+            case .notDetermined:
+                authorization = .notDetermined
+                logStatus(.notDetermined)
+                requestWhenApplicationIsActive(after: delay, completion: completion)
+            case .authorized, .denied, .restricted:
+                let resolvedStatus = map(current)
+                authorization = resolvedStatus
+                logStatus(resolvedStatus)
+                completion(resolvedStatus)
+            @unknown default:
+                authorization = .denied
+                logStatus(.denied)
+                completion(.denied)
             }
             return
         }
         #endif
-        // Pre–iOS 14: no ATT API; treat as authorized for ad configuration only.
+
+        // Pre-iOS 14: no ATT API; treat as authorized for ad configuration only.
         authorization = .authorized
+        logStatus(.authorized)
+        completion(.authorized)
     }
 
     #if canImport(AppTrackingTransparency)
@@ -78,4 +84,41 @@ enum AppTrackingService {
         }
     }
     #endif
+
+    #if canImport(AppTrackingTransparency) && canImport(UIKit)
+    @available(iOS 14, *)
+    private static func requestWhenApplicationIsActive(
+        after delay: TimeInterval,
+        completion: @escaping (TrackingAuthorization) -> Void
+    ) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            guard UIApplication.shared.applicationState == .active else {
+                requestWhenApplicationIsActive(after: 0.25, completion: completion)
+                return
+            }
+
+            ATTrackingManager.requestTrackingAuthorization { status in
+                Task { @MainActor in
+                    let resolvedStatus = map(status)
+                    authorization = resolvedStatus
+                    logStatus(resolvedStatus)
+                    completion(resolvedStatus)
+                }
+            }
+        }
+    }
+    #endif
+
+    private static func logStatus(_ status: TrackingAuthorization) {
+        switch status {
+        case .authorized:
+            print("[ATT] Status: authorized")
+        case .denied:
+            print("[ATT] Status: denied")
+        case .restricted:
+            print("[ATT] Status: restricted")
+        case .notDetermined:
+            print("[ATT] Status: notDetermined")
+        }
+    }
 }

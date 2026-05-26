@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>NSUserTrackingUsageDescription</key>
-	<string>This allows Bunk Planner to show ads that match your interests. If you choose not to allow tracking, the app works the same and ads are less personalized.</string>
+	<string>This identifier helps Bunk Planner show more relevant ads and keep the app free. If you choose not to allow tracking, the app still works and ads may be less personalized.</string>
 	<key>GADApplicationIdentifier</key>
 	<string>ca-app-pub-6782814088719675~7481844312</string>
 	<key>SKAdNetworkItems</key>

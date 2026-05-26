@@ -25,6 +25,9 @@ struct ContentView: View {
                     .foregroundStyle(.white.opacity(0.9))
             }
         }
+        .onAppear {
+            AdMobService.requestTrackingPermission()
+        }
         .task(id: subjectStore == nil) {
             guard subjectStore == nil else { return }
             await Task.yield()
@@ -32,8 +35,6 @@ struct ContentView: View {
             let store = SubjectStore()
             store.performDeferredLaunchTasks()
             subjectStore = store
-            // Consent form needs a window; gather before native ads load.
-            AdMobService.startIfNeeded()
         }
     }
 }

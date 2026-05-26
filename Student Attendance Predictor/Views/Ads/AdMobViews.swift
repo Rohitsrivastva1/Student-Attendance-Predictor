@@ -17,13 +17,38 @@ enum AdMobService {
     #if canImport(GoogleMobileAds)
     @MainActor
     private static var isStarted = false
+    @MainActor
+    private static var hasRequestedTrackingPermission = false
     private static var readyContinuations: [CheckedContinuation<Void, Never>] = []
 
     static var isReady: Bool { isStarted }
 
     static func startIfNeeded() {
         Task { @MainActor in
-            await start()
+            requestTrackingPermission()
+        }
+    }
+
+    @MainActor
+    static func requestTrackingPermission() {
+        guard isStarted == false, hasRequestedTrackingPermission == false else { return }
+        hasRequestedTrackingPermission = true
+
+        AppTrackingService.requestTrackingPermission { _ in
+            Task { @MainActor in
+                applyRequestConfigurationForTracking()
+                await AdMobConsentService.gatherConsentIfNeeded()
+                guard AdMobConsentService.canRequestAds else {
+                    completeStartup()
+                    return
+                }
+                // AdMob initialization happens only after ATT resolves.
+                MobileAds.shared.start { _ in
+                    Task { @MainActor in
+                        completeStartup()
+                    }
+                }
+            }
         }
     }
 
@@ -32,22 +57,7 @@ enum AdMobService {
         if isStarted { return }
         await withCheckedContinuation { continuation in
             readyContinuations.append(continuation)
-            guard readyContinuations.count == 1 else { return }
-            Task { @MainActor in
-                // ATT must finish before UMP or Mobile Ads — otherwise IDFA is read too early.
-                await AppTrackingService.requestAuthorizationIfNeeded()
-                applyRequestConfigurationForTracking()
-                await AdMobConsentService.gatherConsentIfNeeded()
-                guard AdMobConsentService.canRequestAds else {
-                    completeStartup()
-                    return
-                }
-                MobileAds.shared.start { _ in
-                    Task { @MainActor in
-                        completeStartup()
-                    }
-                }
-            }
+            requestTrackingPermission()
         }
     }
 
@@ -83,6 +93,7 @@ enum AdMobService {
     }
     #else
     static func startIfNeeded() {}
+    static func requestTrackingPermission() {}
     static var isReady: Bool { false }
     static func start() async {}
     #endif
