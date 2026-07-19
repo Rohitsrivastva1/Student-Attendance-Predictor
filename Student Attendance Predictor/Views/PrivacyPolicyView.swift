@@ -23,7 +23,12 @@ struct PrivacyPolicyView: View {
 
                 section(
                     title: "Advertising",
-                    body: "Bunk Planner is free and supported by ads from Google AdMob. Ads may appear as labeled “Ad” cards in the app. Google may collect device and ad interaction data to deliver and measure ads. We do not sell your attendance data to advertisers."
+                    body: "Bunk Planner is free and supported by ads from Google AdMob. Ads may appear as labeled “Ad” cards in the app, as short full-screen videos after you mark attendance, or when you open or return to the app. Google may collect device and ad interaction data to deliver and measure ads. We do not sell your attendance data to advertisers."
+                )
+
+                section(
+                    title: "Analytics",
+                    body: "To understand how the app is used and to improve it, Bunk Planner uses Google Firebase Analytics. It collects anonymous, aggregated usage data such as which screens you open, which features you use (for example marking a day or watching a rewarded ad), session length, app version, device model, and OS version. This data is tied only to a random, app-generated identifier — not your name, email, or Apple ID — and is not used to read your subject names or attendance numbers. Analytics helps us see which features matter and where the app can be better."
                 )
 
                 section(
@@ -43,7 +48,7 @@ struct PrivacyPolicyView: View {
 
                 section(
                     title: "What We Do Not Collect",
-                    body: "We do not use separate analytics SDKs to profile how you use the calculator. We do not require tracking permission to use attendance planning, subject management, or core app features."
+                    body: "We do not upload your subject names or attendance records to our servers, and we do not sell your data. Analytics is anonymous and aggregated (see “Analytics”). We do not require tracking permission to use attendance planning, subject management, or core app features."
                 )
 
                 section(

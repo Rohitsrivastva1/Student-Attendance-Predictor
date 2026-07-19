@@ -19,6 +19,8 @@ struct HomeView: View {
     @State private var selectedScenario: ScenarioAction = .current
     @State private var isShowingSettings = false
     @State private var isShowingSubjects = false
+    @State private var isShowingSubjectPicker = false
+    @State private var showAdvancedHome = false
     @State private var editingTimetableSubjectID: UUID?
     @State private var overviewEditingSubjectID: UUID?
     @State private var overviewEditingName = ""
@@ -27,9 +29,27 @@ struct HomeView: View {
     @State private var isBreakdownExpanded = false
     @State private var customAttendCount = 0
     @State private var customMissCount = 0
-    @State private var forecastWeeks = 1
+    @State private var forecastWeeks = SemesterSettings.weeksRemaining()
     @State private var forecastHolidayClasses = 0
     @State private var forecastExpectedAbsences = 0
+    @State private var forecastClassesPerWeek = 5
+    @State private var showForecastAssumptions = false
+    @State private var expandedForecastSubjectIDs: Set<UUID> = []
+    @State private var semesterStartDate = SemesterSettings.startDate ?? Date()
+    @State private var semesterEndDate = SemesterSettings.endDate ?? Calendar.current.date(byAdding: .weekOfYear, value: 16, to: Date())!
+    @ObservedObject private var entitlements = AdEntitlementsStore.shared
+    @StateObject private var gpaStore = GPAStore()
+    @StateObject private var deadlineStore = DeadlineStore()
+    @State private var isUnlockingForecast = false
+    @State private var forecastRewardErrorMessage: String?
+    @State private var isShowingProPaywall = false
+    @State private var proPaywallSource = "forecast"
+    @State private var isRemovingAdsRewarded = false
+    @State private var studentMarket = StudentMarketStore.current
+
+    private var hasAttendanceData: Bool {
+        viewModel.totalClasses > 0
+    }
     
     private var isRegularWidth: Bool {
         horizontalSizeClass == .regular
@@ -41,8 +61,8 @@ struct HomeView: View {
     @ViewBuilder
     private var bottomChrome: some View {
         VStack(spacing: 0) {
-            if let result = viewModel.result {
-                floatingActionBanner(for: result)
+            if selectedTab == .home {
+                floatingActionBanner(for: viewModel.result)
                     .padding(.horizontal, isRegularWidth ? 28 : 20)
                     .padding(.top, 6)
                     .padding(.bottom, isRegularWidth ? 6 : 8)
@@ -53,22 +73,20 @@ struct HomeView: View {
     /// iPhone: floating “Attend … next” strip inside scroll `safeAreaInset` so content never sits under it.
     @ViewBuilder
     private var phoneFloatingResultStrip: some View {
-        if let result = viewModel.result {
-            VStack(spacing: 0) {
-                floatingActionBanner(for: result)
-                    .padding(.horizontal, 20)
-                    .padding(.top, 6)
-                    .padding(.bottom, 8)
-            }
-            .frame(maxWidth: .infinity)
-            .background(Color(red: 0.05, green: 0.06, blue: 0.1))
+        VStack(spacing: 0) {
+            floatingActionBanner(for: viewModel.result)
+                .padding(.horizontal, 20)
+                .padding(.top, 6)
+                .padding(.bottom, 8)
         }
+        .frame(maxWidth: .infinity)
+        .background(Color(red: 0.05, green: 0.06, blue: 0.1))
     }
 
     private func phoneScrollWithFABInset<Content: View>(@ViewBuilder scroll: () -> Content) -> some View {
         scroll()
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                if !isRegularWidth {
+                if !isRegularWidth && selectedTab == .home {
                     phoneFloatingResultStrip
                 }
             }
@@ -96,6 +114,12 @@ struct HomeView: View {
 
                     Button {
                         triggerLightHaptic()
+                        AnalyticsService.shared.log(.settingsOpened)
+                        // Start rewarded load as soon as Settings is opened so the
+                        // Remove Ads tap does not wait on a cold load.
+                        if entitlements.areBannersHidden == false {
+                            AdMobRewardedService.shared.preload()
+                        }
                         isShowingSettings = true
                     } label: {
                         Image(systemName: "gearshape.fill")
@@ -115,16 +139,45 @@ struct HomeView: View {
             .onChange(of: viewModel.reviewRequestToken) { _, _ in
                 requestAppReview()
             }
+            .onAppear {
+                AnalyticsService.shared.setScreen(selectedTab.analyticsScreen)
+                AnalyticsUserProfile.sync(subjectStore: subjectStore)
+            }
+            .onChange(of: selectedTab) { _, newTab in
+                AnalyticsService.shared.setScreen(newTab.analyticsScreen)
+                if newTab == .insights {
+                    AdMobInterstitialService.shared.tryShowAfterInsightsOpened()
+                    // Preload before the user scrolls to the forecast unlock CTA.
+                    if entitlements.isForecastUnlocked == false {
+                        AdMobRewardedService.shared.preload()
+                    }
+                }
+            }
             .sheet(isPresented: $isShowingShareSheet) {
                 ActivityView(activityItems: shareItems)
             }
             .sheet(isPresented: $isShowingSettings) {
                 SettingsSheetView(viewModel: viewModel)
                     .preferredColorScheme(.dark)
+                    .analyticsScreen(.settings)
+            }
+            .onChange(of: isShowingSettings) { _, isShowing in
+                if isShowing == false {
+                    studentMarket = StudentMarketStore.current
+                }
             }
             .sheet(isPresented: $isShowingSubjects) {
                 SubjectListView(subjectStore: subjectStore)
                     .preferredColorScheme(.dark)
+                    .analyticsScreen(.subjects)
+            }
+            .sheet(isPresented: $isShowingSubjectPicker) {
+                SubjectPickerSheet(subjectStore: subjectStore) {
+                    isShowingSubjects = true
+                }
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .preferredColorScheme(.dark)
             }
             .sheet(
                 isPresented: Binding(
@@ -139,7 +192,25 @@ struct HomeView: View {
                 if let subjectID = editingTimetableSubjectID {
                     TimetableEditorSheet(subjectStore: subjectStore, subjectID: subjectID)
                         .preferredColorScheme(.dark)
+                        .analyticsScreen(.timetableEditor)
                 }
+            }
+            .alert("Rewarded Ad", isPresented: Binding(
+                get: { forecastRewardErrorMessage != nil },
+                set: { isPresented in
+                    if isPresented == false {
+                        forecastRewardErrorMessage = nil
+                    }
+                }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(forecastRewardErrorMessage ?? "")
+            }
+            .sheet(isPresented: $isShowingProPaywall) {
+                ProPaywallView(source: proPaywallSource)
+                    .preferredColorScheme(.dark)
+                    .analyticsScreen(.proPaywall)
             }
             .applyImpactFeedback(trigger: viewModel.attendedClassesInput)
             .applyImpactFeedback(trigger: viewModel.totalClassesInput)
@@ -163,8 +234,12 @@ struct HomeView: View {
                     homeTabContent
                 case .insights:
                     insightsTabContent
+                case .log:
+                    logTabContent
                 case .overview:
                     overviewTabContent
+                case .academics:
+                    academicsTabContent
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -274,21 +349,65 @@ struct HomeView: View {
             homeTabContent
         case .insights:
             insightsTabContent
+        case .log:
+            logTabContent
         case .overview:
             overviewTabContent
+        case .academics:
+            academicsTabContent
+        }
+    }
+
+    private var academicsTabContent: some View {
+        phoneScrollWithFABInset {
+            ScrollView {
+                AcademicsView(gpaStore: gpaStore, deadlineStore: deadlineStore)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 24)
+                    .padding(.bottom, tabScrollBottomPadding)
+                    .frame(maxWidth: isRegularWidth ? 920 : .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
+        }
+    }
+
+    private var logTabContent: some View {
+        phoneScrollWithFABInset {
+            ScrollView {
+                VStack(spacing: 24) {
+                    AttendanceLogView(subjectStore: subjectStore)
+                    // No banner here — Log previously reused the Insights unit and
+                    // doubled requests every tab switch without adding inventory.
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 24)
+                .padding(.bottom, tabScrollBottomPadding)
+                .frame(maxWidth: isRegularWidth ? 920 : .infinity)
+                .frame(maxWidth: .infinity, alignment: .center)
+            }
         }
     }
 
     private var homeTabContent: some View {
         phoneScrollWithFABInset {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 24) {
-                    headerSection
-                    activeSubjectSelectorCard
-                    homeHeroSection
-                    inputSection
-                    AdMobNativeCard(placement: "home-total-classes")
-                    homeSupportingSection
+                LazyVStack(alignment: .leading, spacing: 20) {
+                    compactHeaderSection
+                    if let tip = studentMarket.homeMarketTip {
+                        marketModeBanner(tip)
+                    }
+                    subjectPickerChip
+                    assistantHeroSection
+                    MarkTodayCard(subjectStore: subjectStore)
+
+                    if hasAttendanceData {
+                        AdMobBannerCard(
+                            placement: AdMobConfiguration.Placement.home,
+                            isActive: selectedTab == .home
+                        )
+                        rewardedUpsellCard
+                        advancedDetailsDisclosure
+                    }
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 24)
@@ -303,9 +422,16 @@ struct HomeView: View {
         phoneScrollWithFABInset {
             ScrollView {
                 VStack(spacing: 24) {
+                    weeklySummaryCard
+                    streakAndHighlightsCard
+                    gamificationBadgesCard
                     trendGraphCard
-                    AdMobNativeCard(placement: "insights-trend-forecast")
+                    AdMobBannerCard(
+                        placement: AdMobConfiguration.Placement.insights,
+                        isActive: selectedTab == .insights
+                    )
                     subjectForecastCard
+                    rewardedUpsellCard
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 24)
@@ -320,8 +446,11 @@ struct HomeView: View {
         phoneScrollWithFABInset {
             ScrollView {
                 VStack(spacing: 24) {
-                    facultyDashboardCard
-                    AdMobNativeCard(placement: "overview-dashboard-subjects")
+                    allSubjectsDashboardCard
+                    AdMobBannerCard(
+                        placement: AdMobConfiguration.Placement.overview,
+                        isActive: selectedTab == .overview
+                    )
                     overviewSubjectManagerCard
                 }
                 .padding(.horizontal, 20)
@@ -333,6 +462,83 @@ struct HomeView: View {
         }
     }
     
+    private var rewardedUpsellCard: some View {
+        Group {
+            if entitlements.isPro == false, entitlements.areBannersHidden == false {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Quiet mode")
+                        .font(.system(size: 15, weight: .black, design: .rounded))
+                        .foregroundStyle(.white)
+                    Text("Watch a short video to hide ads for 24 hours — or go Pro forever.")
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.65))
+
+                    Button {
+                        watchAdToRemoveAds()
+                    } label: {
+                        HStack(spacing: 8) {
+                            if isRemovingAdsRewarded {
+                                ProgressView().tint(.black)
+                            } else {
+                                Image(systemName: "play.rectangle.fill")
+                            }
+                            Text(isRemovingAdsRewarded ? "Loading ad…" : "Watch ad · Hide ads 24h")
+                                .font(.system(size: 14, weight: .bold, design: .rounded))
+                        }
+                        .foregroundStyle(.black)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(Color(red: 0.32, green: 0.84, blue: 1.0))
+                        )
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                    .disabled(isRemovingAdsRewarded)
+                    .onAppear {
+                        AdMobRewardedService.shared.preload()
+                    }
+
+                    Button {
+                        triggerLightHaptic()
+                        proPaywallSource = "rewarded_upsell"
+                        isShowingProPaywall = true
+                    } label: {
+                        Label("Go Pro — never watch an ad again", systemImage: "crown.fill")
+                            .font(.system(size: 13, weight: .bold, design: .rounded))
+                            .foregroundStyle(Color(red: 1.0, green: 0.82, blue: 0.38))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                }
+                .padding(16)
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(Color.white.opacity(0.05))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                        )
+                )
+            }
+        }
+    }
+
+    private func watchAdToRemoveAds() {
+        isRemovingAdsRewarded = true
+        AnalyticsService.shared.log(.rewardedAdRequested(placement: "remove_ads_home"))
+        AdMobRewardedService.shared.showAd(placement: "remove_ads_home") { earned in
+            isRemovingAdsRewarded = false
+            if earned {
+                entitlements.grantBannerRemoval()
+                AnalyticsService.shared.log(.rewardedAdRewardEarned(placement: "remove_ads_home"))
+            } else {
+                forecastRewardErrorMessage = "The rewarded ad couldn't be shown right now. Please try again in a moment."
+                AnalyticsService.shared.log(.rewardedAdFailed(placement: "remove_ads_home", reason: "not_earned"))
+            }
+        }
+    }
+
     private var animatedBackground: some View {
         LinearGradient(
             colors: [
@@ -346,112 +552,140 @@ struct HomeView: View {
         .ignoresSafeArea()
     }
 
-    private var headerSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+    private var compactHeaderSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
             Text("Bunk Planner")
-                .font(.system(size: 34, weight: .black, design: .rounded))
-                .foregroundStyle(
-                    LinearGradient(
-                        colors: [.white, .white.opacity(0.72)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .shadow(color: .white.opacity(0.28), radius: 10, x: 0, y: 0)
-
-            HStack(spacing: 8) {
-                Text("Attendance Track")
-                    .font(.system(size: 16, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color(red: 0.32, green: 0.84, blue: 1.0))
-                    .textCase(.uppercase)
-                    .tracking(1.1)
-
-                Text("LIVE")
-                    .font(.system(size: 10, weight: .black, design: .rounded))
-                    .foregroundStyle(Color(red: 0.03, green: 0.09, blue: 0.18))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(
-                        Capsule(style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: [Color(red: 0.62, green: 0.98, blue: 1.0), Color(red: 0.32, green: 0.88, blue: 1.0)],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                            .overlay(
-                                Capsule(style: .continuous)
-                                    .stroke(Color.white.opacity(0.42), lineWidth: 0.8)
-                            )
-                            .shadow(color: Color(red: 0.52, green: 0.96, blue: 1.0).opacity(0.78), radius: 10, x: 0, y: 0)
-                            .shadow(color: Color(red: 0.35, green: 0.9, blue: 1.0).opacity(0.52), radius: 16, x: 0, y: 0)
-                    )
-            }
-
-            Text("Don't guess your attendance — predict it.")
-                .font(.system(size: 12, weight: .medium, design: .rounded))
-                .foregroundStyle(.white.opacity(0.65))
-
-            Rectangle()
-                .fill(
-                    LinearGradient(
-                        colors: [Color.white.opacity(0.28), Color.white.opacity(0.06)],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-                .frame(width: 170, height: 1)
-                .padding(.top, 4)
+                .font(.system(size: 28, weight: .black, design: .rounded))
+                .foregroundStyle(.white)
+            Text("Don't guess — know if you can \(studentMarket.skipVerb).")
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .foregroundStyle(.white.opacity(0.6))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var activeSubjectSelectorCard: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("ACTIVE SUBJECT")
-                    .font(.system(size: 11, weight: .black, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.55))
-                    .tracking(1.0)
-                Text(subjectStore.selectedSubjectName)
-                    .font(.system(size: 16, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
+    private func marketModeBanner(_ tip: String) -> some View {
+        Button {
+            triggerLightHaptic()
+            withAnimation(.easeInOut(duration: 0.2)) {
+                selectedTab = .academics
             }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "graduationcap.fill")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(Color(red: 0.32, green: 0.84, blue: 1.0))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(tip)
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.leading)
+                    Text("Tap to open Grades →")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color(red: 0.32, green: 0.84, blue: 1.0))
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color(red: 0.32, green: 0.84, blue: 1.0).opacity(0.12))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(Color(red: 0.32, green: 0.84, blue: 1.0).opacity(0.35), lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(PressableButtonStyle())
+    }
 
-            Spacer()
+    private var subjectPickerChip: some View {
+        Button {
+            triggerLightHaptic()
+            isShowingSubjectPicker = true
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "book.closed.fill")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(Color(red: 0.32, green: 0.84, blue: 1.0))
 
-            Menu {
-                ForEach(subjectStore.subjects) { subject in
-                    Button(subject.name) {
-                        subjectStore.selectSubject(subject)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(subjectStore.selectedSubjectName)
+                        .font(.system(size: 16, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                    if let result = viewModel.result, hasAttendanceData {
+                        Text("\(Int(result.currentPercentage.rounded()))%")
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.6))
+                    } else {
+                        Text("Tap to switch \(studentMarket.courseNoun)")
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.5))
                     }
                 }
-            } label: {
-                Label("Switch", systemImage: "arrow.triangle.2.circlepath")
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(
-                        Capsule(style: .continuous)
-                            .fill(Color.white.opacity(0.12))
-                            .overlay(
-                                Capsule(style: .continuous)
-                                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
-                            )
+
+                Spacer()
+
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.55))
+            }
+            .padding(16)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.white.opacity(0.06))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(Color.white.opacity(0.12), lineWidth: 1)
                     )
+            )
+        }
+        .buttonStyle(PressableButtonStyle())
+    }
+
+    private var advancedDetailsDisclosure: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Button {
+                triggerLightHaptic()
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    showAdvancedHome.toggle()
+                }
+            } label: {
+                HStack {
+                    Text(showAdvancedHome ? "Hide details" : "More details")
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                    Spacer()
+                    Image(systemName: showAdvancedHome ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 12, weight: .bold))
+                }
+                .foregroundStyle(.white.opacity(0.75))
+                .padding(14)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.white.opacity(0.05))
+                )
             }
             .buttonStyle(PressableButtonStyle())
+
+            if showAdvancedHome {
+                VStack(spacing: 20) {
+                    if let result = displayResult {
+                        scenarioSection(baseResult: viewModel.result, displayedResult: result)
+                        riskAlertsCard(for: result)
+                    }
+                    inputSection
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(Color.white.opacity(0.06))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                )
-        )
+    }
+
+    private var headerSection: some View {
+        compactHeaderSection
+    }
+
+    private var activeSubjectSelectorCard: some View {
+        subjectPickerChip
     }
 
     private var inputSection: some View {
@@ -538,11 +772,167 @@ struct HomeView: View {
     }
 
     private var homeHeroSection: AnyView {
-        guard let result = displayResult else {
-            return AnyView(placeholderSection)
-        }
+        AnyView(assistantHeroSection)
+    }
 
-        return AnyView(heroCard(for: result))
+    @ViewBuilder
+    private var assistantHeroSection: some View {
+        if let result = viewModel.result, hasAttendanceData {
+            assistantHeroCard(for: result)
+        } else {
+            welcomeEmptyState
+        }
+    }
+
+    private var welcomeEmptyState: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Welcome 👋")
+                .font(.system(size: 28, weight: .black, design: .rounded))
+                .foregroundStyle(.white)
+
+            Text("Let's calculate your attendance.\nAdd your first subject — or mark today's class to get started.")
+                .font(.system(size: 15, weight: .medium, design: .rounded))
+                .foregroundStyle(.white.opacity(0.7))
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button {
+                triggerLightHaptic()
+                isShowingSubjectPicker = true
+            } label: {
+                Text("Get Started")
+                    .font(.system(size: 16, weight: .heavy, design: .rounded))
+                    .foregroundStyle(.black)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(Color(red: 0.32, green: 0.84, blue: 1.0))
+                    )
+            }
+            .buttonStyle(PressableButtonStyle())
+        }
+        .padding(22)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(Color.white.opacity(0.06))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                )
+        )
+    }
+
+    private func assistantHeroCard(for result: AttendanceResult) -> some View {
+        let isSafe = result.status == .safe
+        let accent = isSafe ? Color(red: 0.2, green: 0.9, blue: 0.5) : Color(red: 1.0, green: 0.35, blue: 0.4)
+        let attendImpact = viewModel.simulatedResult(attendMore: 1)
+        let skipImpact = viewModel.simulatedResult(skipMore: 1)
+
+        return VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Text("Today's Attendance")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.55))
+                Spacer()
+                Button {
+                    triggerLightHaptic()
+                    shareResult(result)
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.8))
+                        .padding(8)
+                        .background(Circle().fill(Color.white.opacity(0.1)))
+                }
+                .buttonStyle(PressableButtonStyle())
+            }
+
+            Text(assistantHeadline(for: result))
+                .font(.system(size: 22, weight: .black, design: .rounded))
+                .foregroundStyle(.white)
+
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("\(Int(result.currentPercentage.rounded()))%")
+                    .font(.system(size: 48, weight: .black, design: .rounded))
+                    .foregroundStyle(accent)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(isSafe ? "Safe to skip" : "Need to attend")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.55))
+                    Text(isSafe
+                          ? "\(result.bunkAllowed) class\(result.bunkAllowed == 1 ? "" : "es")"
+                          : "\(result.recoveryNeeded) more")
+                        .font(.system(size: 18, weight: .heavy, design: .rounded))
+                        .foregroundStyle(.white)
+                }
+                Spacer()
+            }
+
+            if let attendImpact, let skipImpact {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Tomorrow")
+                        .font(.system(size: 12, weight: .black, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .tracking(0.8)
+
+                    HStack(spacing: 10) {
+                        tomorrowChip(
+                            title: "Attend",
+                            value: String(format: "%.1f%%", attendImpact.currentPercentage),
+                            tint: Color(red: 0.2, green: 0.9, blue: 0.5)
+                        )
+                        tomorrowChip(
+                            title: "Skip",
+                            value: String(format: "%.1f%%", skipImpact.currentPercentage),
+                            tint: .orange
+                        )
+                    }
+                }
+            }
+        }
+        .padding(22)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(Color.white.opacity(0.06))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .stroke(accent.opacity(0.35), lineWidth: 1.2)
+                )
+        )
+    }
+
+    private func tomorrowChip(title: String, value: String, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.55))
+            Text(value)
+                .font(.system(size: 18, weight: .heavy, design: .rounded))
+                .foregroundStyle(tint)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+        )
+    }
+
+    private func assistantHeadline(for result: AttendanceResult) -> String {
+        if isPerfectAttendance(result: result) {
+            return "Perfect streak — keep it going ✨"
+        }
+        if isRecoveryMode(result: result) {
+            return "Recovery mode — you can bounce back."
+        }
+        if result.status == .safe {
+            return result.bunkAllowed > 0
+                ? "Good news 🎉\nYou can safely miss \(result.bunkAllowed) more class\(result.bunkAllowed == 1 ? "" : "es")."
+                : "You're right on the safe line."
+        }
+        return "Attend the next \(result.recoveryNeeded) class\(result.recoveryNeeded == 1 ? "" : "es") to recover."
     }
 
     private var homeSupportingSection: some View {
@@ -560,10 +950,9 @@ struct HomeView: View {
     private var overviewSubjectManagerCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("SUBJECT MANAGER")
-                    .font(.system(size: 12, weight: .black, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.55))
-                    .tracking(1.1)
+                Text("Manage \(studentMarket.courseNounPluralTitle)")
+                    .font(.system(size: 16, weight: .black, design: .rounded))
+                    .foregroundStyle(.white)
                 Spacer()
                 Button {
                     triggerLightHaptic()
@@ -576,7 +965,7 @@ struct HomeView: View {
             }
 
             if subjectStore.subjects.isEmpty {
-                Text("No subjects yet.")
+                Text("No \(studentMarket.courseNounPlural) yet.")
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.8))
             } else {
@@ -682,7 +1071,7 @@ struct HomeView: View {
                     )
                 }
 
-                Button("Open Full Subject Manager") {
+                Button("Open Full \(studentMarket.courseNoun.capitalized) Manager") {
                     isShowingSubjects = true
                 }
                 .font(.system(size: 13, weight: .bold, design: .rounded))
@@ -859,50 +1248,67 @@ struct HomeView: View {
     private func scenarioSection(baseResult: AttendanceResult?, displayedResult: AttendanceResult) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("SCENARIO SIMULATOR")
-                    .font(.system(size: 12, weight: .black, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.5))
-                    .tracking(1.2)
+                Text("What if…")
+                    .font(.system(size: 18, weight: .black, design: .rounded))
+                    .foregroundStyle(.white)
 
-                Text("Forecast your future standing")
-                    .font(.system(size: 14, weight: .medium, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.8))
+                Text("Pick a natural scenario — calculations stay behind the scenes.")
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.65))
             }
 
-            HStack(spacing: 12) {
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                 ForEach(ScenarioAction.allCases) { scenario in
                     Button {
                         triggerLightHaptic()
                         selectedScenario = scenario
+                        AnalyticsService.shared.log(.scenarioSelected(scenario: scenario.description))
                     } label: {
                         let isSelected = selectedScenario == scenario
                         let accentColor = Color(red: 0.3, green: 0.7, blue: 1.0)
 
                         Text(scenario.label)
-                            .font(.system(size: 14, weight: .bold, design: .rounded))
-                            .foregroundStyle(isSelected ? .white : .white.opacity(0.6))
+                            .font(.system(size: 13, weight: .bold, design: .rounded))
+                            .foregroundStyle(isSelected ? .white : .white.opacity(0.7))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 14)
                             .background(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .fill(isSelected ? accentColor.opacity(0.2) : Color.black.opacity(0.2))
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .fill(isSelected ? accentColor.opacity(0.22) : Color.black.opacity(0.22))
                                     .overlay(
-                                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                        RoundedRectangle(cornerRadius: 14, style: .continuous)
                                             .stroke(isSelected ? accentColor : Color.white.opacity(0.1), lineWidth: isSelected ? 1.5 : 1)
                                     )
                             )
-                            .shadow(color: isSelected ? accentColor.opacity(0.3) : .clear, radius: 10, x: 0, y: 4)
-                            .scaleEffect(isSelected ? 1.03 : 1.0)
                     }
                     .buttonStyle(PressableButtonStyle())
                 }
             }
 
+            if selectedScenario == .custom {
+                HStack {
+                    Stepper("Skip \(customMissCount)", value: $customMissCount, in: 0...20)
+                    Spacer()
+                    Stepper("Attend \(customAttendCount)", value: $customAttendCount, in: 0...20)
+                }
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.9))
+            }
+
             Text(scenarioInsight(baseResult: baseResult, displayedResult: displayedResult))
                 .font(.system(size: 14, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color(red: 0.9, green: 0.9, blue: 1.0).opacity(0.7))
-                .padding(.top, 4)
+                .foregroundStyle(Color(red: 0.9, green: 0.9, blue: 1.0).opacity(0.75))
+                .padding(.top, 2)
         }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                )
+        )
     }
 
     private func riskAlertsCard(for result: AttendanceResult) -> some View {
@@ -915,7 +1321,7 @@ struct HomeView: View {
         let message: String = {
             switch riskLevel {
             case .stable:
-                return "Early risk check: Stable. You have healthy bunk buffer."
+                return "Early risk check: Stable. You have healthy \(studentMarket.skipVerb) buffer."
             case .warning:
                 return "Early risk warning: You are close to threshold. Avoid unnecessary absences."
             case .critical:
@@ -945,7 +1351,7 @@ struct HomeView: View {
                 .foregroundStyle(.white.opacity(0.88))
 
             if result.status == .safe {
-                Text("Safe bunk buffer now: \(result.bunkAllowed)")
+                Text("Safe \(studentMarket.skipVerb) buffer now: \(result.bunkAllowed)")
                     .font(.system(size: 13, weight: .bold, design: .rounded))
                     .foregroundStyle(color)
             } else {
@@ -1009,52 +1415,153 @@ struct HomeView: View {
         )
     }
 
+    @ViewBuilder
     private var subjectForecastCard: some View {
+        if entitlements.isForecastUnlocked {
+            forecastDetailCard
+        } else {
+            lockedForecastCard
+        }
+    }
+
+    private var lockedForecastCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Color(red: 0.32, green: 0.84, blue: 1.0))
+                Text("SUBJECT FORECAST")
+                    .font(.system(size: 12, weight: .black, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.55))
+                    .tracking(1.1)
+            }
+
+            Text("See where each subject lands by the end of the semester — and which ones may fall below target.")
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.8))
+
+            Button {
+                unlockForecast()
+            } label: {
+                HStack(spacing: 8) {
+                    if isUnlockingForecast {
+                        ProgressView()
+                            .tint(.black)
+                    } else {
+                        Image(systemName: "play.rectangle.fill")
+                    }
+                    Text(isUnlockingForecast ? "Loading ad…" : "Watch ad to unlock for 24h")
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                }
+                .foregroundStyle(.black)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(Color(red: 0.32, green: 0.84, blue: 1.0))
+                )
+            }
+            .buttonStyle(PressableButtonStyle())
+            .disabled(isUnlockingForecast)
+
+            Button {
+                triggerLightHaptic()
+                proPaywallSource = "forecast"
+                isShowingProPaywall = true
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "crown.fill")
+                        .font(.system(size: 13, weight: .bold))
+                    Text("Unlock forever with Pro")
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                }
+                .foregroundStyle(Color(red: 1.0, green: 0.82, blue: 0.38))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(Color.white.opacity(0.06))
+                        .overlay(
+                            Capsule(style: .continuous)
+                                .stroke(
+                                    LinearGradient(
+                                        colors: [
+                                            Color(red: 1.0, green: 0.86, blue: 0.42).opacity(0.7),
+                                            Color(red: 0.95, green: 0.58, blue: 0.18).opacity(0.45)
+                                        ],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
+                                    ),
+                                    lineWidth: 1
+                                )
+                        )
+                )
+            }
+            .buttonStyle(PressableButtonStyle())
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Color.white.opacity(0.06))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                )
+        )
+        .onAppear {
+            AnalyticsService.shared.log(.lockedForecastViewed)
+        }
+    }
+
+    private func unlockForecast() {
+        isUnlockingForecast = true
+        AnalyticsService.shared.log(.forecastUnlockRequested)
+        AnalyticsService.shared.log(.rewardedAdRequested(placement: "forecast_unlock"))
+        AdMobRewardedService.shared.showAd(placement: "forecast_unlock") { earned in
+            isUnlockingForecast = false
+            if earned {
+                entitlements.grantForecastUnlock()
+                AnalyticsService.shared.log(.forecastUnlocked)
+                AnalyticsService.shared.log(.rewardedAdRewardEarned(placement: "forecast_unlock"))
+            } else {
+                forecastRewardErrorMessage = "The rewarded ad couldn't be shown right now. Please try again in a moment."
+                AnalyticsService.shared.log(.rewardedAdFailed(placement: "forecast_unlock", reason: "not_earned"))
+            }
+        }
+    }
+
+    private var forecastDetailCard: some View {
         let forecasts = subjectStore.subjectForecasts(
             weeks: forecastWeeks,
             holidayClassCount: forecastHolidayClasses,
-            expectedAbsences: forecastExpectedAbsences
+            expectedAbsences: forecastExpectedAbsences,
+            fallbackClassesPerWeek: forecastClassesPerWeek
         )
+        let needsFallback = subjectStore.subjects.contains { $0.weeklySchedule.totalPerWeek == 0 }
 
-        return VStack(alignment: .leading, spacing: 12) {
-            Text("SUBJECT-WISE FORECAST")
-                .font(.system(size: 12, weight: .black, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.55))
-                .tracking(1.1)
+        return VStack(alignment: .leading, spacing: 18) {
+            Text("Subject Forecast")
+                .font(.system(size: 20, weight: .black, design: .rounded))
+                .foregroundStyle(.white)
 
-            HStack {
-                Stepper("Weeks: \(forecastWeeks)", value: $forecastWeeks, in: 1...8)
-                Spacer()
-                Stepper("Holiday classes: \(forecastHolidayClasses)", value: $forecastHolidayClasses, in: 0...30)
-            }
-            .font(.system(size: 12, weight: .semibold, design: .rounded))
-            .foregroundStyle(.white.opacity(0.9))
+            plannedBunksPrimaryInput
 
-            Stepper("Expected absences: \(forecastExpectedAbsences)", value: $forecastExpectedAbsences, in: 0...30)
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.9))
+            forecastAssumptionsDisclosure(showClassesPerWeek: needsFallback)
 
-            if forecasts.isEmpty {
-                Text("No subjects to forecast yet.")
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.8))
-            } else {
-                ForEach(forecasts) { item in
-                    HStack(spacing: 8) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(item.subjectName)
-                                .font(.system(size: 13, weight: .bold, design: .rounded))
-                                .foregroundStyle(.white)
-                            Text("Current \(String(format: "%.1f%%", item.currentPercentage)) → Forecast \(String(format: "%.1f%%", item.forecastedPercentage))")
-                                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                                .foregroundStyle(.white.opacity(0.7))
-                        }
-                        Spacer()
-                        Text(item.riskLevel.rawValue)
-                            .font(.system(size: 11, weight: .black, design: .rounded))
-                            .foregroundStyle(colorForRiskLevel(item.riskLevel))
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Projected Attendance")
+                    .font(.system(size: 15, weight: .black, design: .rounded))
+                    .foregroundStyle(.white)
+
+                if forecasts.isEmpty {
+                    Text("Add a subject with attendance to see projections.")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.75))
+                } else {
+                    ForEach(forecasts) { item in
+                        forecastAccordionCard(for: item)
                     }
-                    .padding(.vertical, 6)
                 }
             }
         }
@@ -1068,31 +1575,482 @@ struct HomeView: View {
                         .stroke(Color.white.opacity(0.12), lineWidth: 1)
                 )
         )
+        .onAppear {
+            AnalyticsService.shared.log(.forecastViewed)
+            SemesterSettings.ensureDefaultDatesIfNeeded()
+            refreshForecastAssumptionsFromSources()
+        }
     }
 
-    private var facultyDashboardCard: some View {
+    private var plannedBunksPrimaryInput: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("How many classes do you plan to miss?")
+                .font(.system(size: 15, weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
+
+            HStack(spacing: 18) {
+                Button {
+                    triggerLightHaptic()
+                    forecastExpectedAbsences = max(0, forecastExpectedAbsences - 1)
+                } label: {
+                    Image(systemName: "minus")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 48, height: 48)
+                        .background(
+                            Circle().fill(Color.white.opacity(0.1))
+                        )
+                }
+                .buttonStyle(PressableButtonStyle())
+
+                Text("\(forecastExpectedAbsences)")
+                    .font(.system(size: 40, weight: .black, design: .rounded))
+                    .foregroundStyle(Color(red: 0.32, green: 0.84, blue: 1.0))
+                    .frame(minWidth: 64)
+
+                Button {
+                    triggerLightHaptic()
+                    forecastExpectedAbsences = min(80, forecastExpectedAbsences + 1)
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 48, height: 48)
+                        .background(
+                            Circle().fill(Color.white.opacity(0.1))
+                        )
+                }
+                .buttonStyle(PressableButtonStyle())
+
+                Spacer(minLength: 0)
+            }
+
+            Text("Classes you plan to miss this semester")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(.white.opacity(0.5))
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(Color(red: 0.32, green: 0.84, blue: 1.0).opacity(0.28), lineWidth: 1)
+                )
+        )
+    }
+
+    private func forecastAssumptionsDisclosure(showClassesPerWeek: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Button {
+                triggerLightHaptic()
+                withAnimation(.easeInOut(duration: 0.22)) {
+                    showForecastAssumptions.toggle()
+                }
+            } label: {
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Forecast Assumptions")
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white)
+                        Text(forecastAssumptionsSummary(showClassesPerWeek: showClassesPerWeek))
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.5))
+                            .lineLimit(2)
+                    }
+                    Spacer()
+                    Text(showForecastAssumptions ? "Hide" : "Edit")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color(red: 0.32, green: 0.84, blue: 1.0))
+                    Image(systemName: showForecastAssumptions ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.55))
+                }
+            }
+            .buttonStyle(PressableButtonStyle())
+
+            if showForecastAssumptions {
+                VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Semester dates")
+                            .font(.system(size: 13, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white)
+                        DatePicker(
+                            "Start",
+                            selection: $semesterStartDate,
+                            displayedComponents: .date
+                        )
+                        .tint(Color(red: 0.32, green: 0.84, blue: 1.0))
+                        .onChange(of: semesterStartDate) { _, newValue in
+                            SemesterSettings.startDate = newValue
+                            forecastWeeks = SemesterSettings.weeksRemaining()
+                        }
+                        DatePicker(
+                            "End",
+                            selection: $semesterEndDate,
+                            in: semesterStartDate...,
+                            displayedComponents: .date
+                        )
+                        .tint(Color(red: 0.32, green: 0.84, blue: 1.0))
+                        .onChange(of: semesterEndDate) { _, newValue in
+                            SemesterSettings.endDate = newValue
+                            forecastWeeks = SemesterSettings.weeksRemaining()
+                        }
+                        Text("Semester remaining: \(forecastWeeks) week\(forecastWeeks == 1 ? "" : "s")")
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color(red: 0.32, green: 0.84, blue: 1.0))
+                    }
+
+                    if showClassesPerWeek {
+                        forecastAssumptionStepper(
+                            title: "Classes per Week",
+                            valueLabel: "\(forecastClassesPerWeek)",
+                            hint: "Fallback when a subject has no timetable",
+                            value: $forecastClassesPerWeek,
+                            range: 1...20
+                        )
+                    } else {
+                        Text("Classes per week are read from each subject's timetable.")
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.5))
+                    }
+
+                    forecastAssumptionStepper(
+                        title: "College Holidays",
+                        valueLabel: "\(forecastHolidayClasses) cancelled",
+                        hint: "Defaults to 0 — change only if needed",
+                        value: $forecastHolidayClasses,
+                        range: 0...40
+                    )
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.white.opacity(0.04))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                )
+        )
+    }
+
+    private func forecastAssumptionsSummary(showClassesPerWeek: Bool) -> String {
+        var parts = ["\(forecastWeeks) weeks left", "\(forecastHolidayClasses) holidays"]
+        if showClassesPerWeek {
+            parts.append("\(forecastClassesPerWeek)/week fallback")
+        } else {
+            parts.append("timetable")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func refreshForecastAssumptionsFromSources() {
+        if let end = SemesterSettings.endDate {
+            semesterEndDate = end
+        }
+        if let start = SemesterSettings.startDate {
+            semesterStartDate = start
+        }
+        forecastWeeks = SemesterSettings.weeksRemaining()
+        syncForecastClassesPerWeekDefault()
+    }
+
+    private func syncForecastClassesPerWeekDefault() {
+        if let selected = subjectStore.subjects.first(where: { $0.id == subjectStore.selectedSubjectID }),
+           selected.weeklySchedule.totalPerWeek > 0 {
+            forecastClassesPerWeek = selected.weeklySchedule.totalPerWeek
+        } else if let any = subjectStore.subjects.first(where: { $0.weeklySchedule.totalPerWeek > 0 }) {
+            forecastClassesPerWeek = any.weeklySchedule.totalPerWeek
+        }
+    }
+
+    private func forecastAssumptionStepper(
+        title: String,
+        valueLabel: String,
+        hint: String,
+        value: Binding<Int>,
+        range: ClosedRange<Int>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(title)
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                Spacer()
+                Text(valueLabel)
+                    .font(.system(size: 13, weight: .heavy, design: .rounded))
+                    .foregroundStyle(Color(red: 0.32, green: 0.84, blue: 1.0))
+            }
+
+            Text(hint)
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(.white.opacity(0.45))
+
+            Stepper("", value: value, in: range)
+                .labelsHidden()
+                .tint(Color(red: 0.32, green: 0.84, blue: 1.0))
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func forecastAccordionCard(for item: SubjectForecast) -> some View {
+        let isExpanded = expandedForecastSubjectIDs.contains(item.id)
+        let statusColor = colorForRiskLevel(item.riskLevel)
+
+        return VStack(alignment: .leading, spacing: 0) {
+            Button {
+                triggerLightHaptic()
+                withAnimation(.easeInOut(duration: 0.22)) {
+                    if isExpanded {
+                        expandedForecastSubjectIDs.remove(item.id)
+                    } else {
+                        expandedForecastSubjectIDs.insert(item.id)
+                    }
+                }
+            } label: {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(item.subjectName)
+                            .font(.system(size: 15, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white)
+                        Text(item.primaryActionMessage)
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.6))
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    VStack(alignment: .trailing, spacing: 6) {
+                        Text(String(format: "%.0f%%", item.forecastedPercentage))
+                            .font(.system(size: 22, weight: .black, design: .rounded))
+                            .foregroundStyle(item.willFallBelowTarget ? Color.orange : .white)
+                        forecastStatusBadge(item.riskLevel)
+                    }
+
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.45))
+                }
+                .padding(14)
+            }
+            .buttonStyle(PressableButtonStyle())
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 14) {
+                    Divider().overlay(Color.white.opacity(0.08))
+
+                    Text(item.primaryActionMessage)
+                        .font(.system(size: 18, weight: .black, design: .rounded))
+                        .foregroundStyle(statusColor)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    forecastVisualComparison(for: item)
+
+                    Text(forecastStatusMessage(for: item))
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.8))
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if item.usedFallbackSchedule {
+                        Text("No timetable — using \(forecastClassesPerWeek) classes/week. Set a timetable for accuracy.")
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color(red: 1.0, green: 0.78, blue: 0.28).opacity(0.9))
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.bottom, 14)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(statusColor.opacity(item.riskLevel == .stable ? 0.15 : 0.35), lineWidth: 1)
+                )
+        )
+    }
+
+    private func forecastStatusBadge(_ level: RiskAlertLevel) -> some View {
+        let color = colorForRiskLevel(level)
+        let icon: String = {
+            switch level {
+            case .stable: return "🟢"
+            case .warning: return "🟡"
+            case .critical: return "🔴"
+            }
+        }()
+
+        return Text("\(icon) \(level.rawValue)")
+            .font(.system(size: 11, weight: .black, design: .rounded))
+            .foregroundStyle(color)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(color.opacity(0.16))
+            )
+    }
+
+    private func forecastVisualComparison(for item: SubjectForecast) -> some View {
+        let delta = item.forecastedPercentage - item.currentPercentage
+        let deltaText: String = {
+            if item.isStableProjection { return "No change expected" }
+            let sign = delta > 0 ? "+" : ""
+            return "\(sign)\(String(format: "%.0f", delta))%"
+        }()
+
+        return VStack(alignment: .leading, spacing: 12) {
+            forecastPercentBar(
+                label: "Current",
+                percentage: item.currentPercentage,
+                tint: Color(red: 0.32, green: 0.84, blue: 1.0)
+            )
+
+            HStack {
+                Spacer()
+                VStack(spacing: 2) {
+                    Image(systemName: item.isStableProjection ? "equal" : (delta < 0 ? "arrow.down" : "arrow.up"))
+                        .font(.system(size: 12, weight: .bold))
+                    Text(deltaText)
+                        .font(.system(size: 12, weight: .heavy, design: .rounded))
+                }
+                .foregroundStyle(
+                    item.isStableProjection
+                        ? Color.white.opacity(0.45)
+                        : (delta < 0 ? Color.orange : Color(red: 0.2, green: 0.9, blue: 0.5))
+                )
+                Spacer()
+            }
+
+            forecastPercentBar(
+                label: "Projected",
+                percentage: item.forecastedPercentage,
+                tint: item.willFallBelowTarget ? Color.orange : Color(red: 0.2, green: 0.9, blue: 0.5)
+            )
+        }
+    }
+
+    private func forecastPercentBar(label: String, percentage: Double, tint: Color) -> some View {
+        let ratio = CGFloat(min(max(percentage / 100, 0), 1))
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(label)
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.55))
+                Spacer()
+                Text(String(format: "%.0f%%", percentage))
+                    .font(.system(size: 16, weight: .black, design: .rounded))
+                    .foregroundStyle(.white)
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.08))
+                    Capsule()
+                        .fill(tint)
+                        .frame(width: max(10, geo.size.width * ratio))
+                }
+            }
+            .frame(height: 12)
+        }
+    }
+
+    private func forecastStatusMessage(for item: SubjectForecast) -> String {
+        let target = Int(item.requiredPercentage.rounded())
+        if item.expectedClasses == 0 {
+            return "Remaining classes are 0 with these assumptions, so the projection can't change yet."
+        }
+        if item.willFallBelowTarget {
+            let recovery = max(1, item.recoveryNeeded)
+            return "May fall below your \(target)% target. Attend \(recovery) consecutive class\(recovery == 1 ? "" : "es") to stay above \(target)%."
+        }
+        switch item.riskLevel {
+        case .stable:
+            let bunks = item.bunkAllowedAfterProjection
+            if bunks > 0 {
+                return "You're projected at \(String(format: "%.0f", item.forecastedPercentage))%. You can safely \(studentMarket.skipVerb) \(bunks) more class\(bunks == 1 ? "" : "es")."
+            }
+            return "No change expected — you're set to stay above \(target)%."
+        case .warning:
+            return "Still above \(target)% for now, but your buffer is thin — avoid extra \(studentMarket.skipNounPlural)."
+        case .critical:
+            return "Projected below your \(target)% target."
+        }
+    }
+
+    private var allSubjectsDashboardCard: some View {
         let summary = subjectStore.dashboardSummary
 
-        return VStack(alignment: .leading, spacing: 10) {
-            Text("FACULTY / ADMIN DASHBOARD")
-                .font(.system(size: 12, weight: .black, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.55))
-                .tracking(1.1)
+        return VStack(alignment: .leading, spacing: 14) {
+            Text("All \(studentMarket.courseNounPluralTitle)")
+                .font(.system(size: 20, weight: .black, design: .rounded))
+                .foregroundStyle(.white)
 
             HStack(spacing: 10) {
-                trendChip(title: "Subjects", value: "\(summary.totalSubjects)")
+                trendChip(title: studentMarket.courseNounPluralTitle, value: "\(summary.totalSubjects)")
                 trendChip(title: "At Risk", value: "\(summary.riskSubjects)")
                 trendChip(title: "Safe", value: "\(summary.safeSubjects)")
             }
 
-            Text("Average attendance: \(String(format: "%.1f%%", summary.averageAttendance))")
-                .font(.system(size: 13, weight: .bold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.9))
-
-            if let atRisk = summary.mostAtRiskSubject {
-                Text("Most at risk: \(atRisk.name) (\(String(format: "%.1f%%", atRisk.currentPercentage)) vs target \(String(format: "%.0f%%", atRisk.requiredPercentage)))")
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.75))
+            if subjectStore.subjects.isEmpty {
+                Text("Add a \(studentMarket.courseNoun) to see your dashboard.")
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.7))
+            } else {
+                ForEach(subjectStore.subjects) { subject in
+                    Button {
+                        triggerLightHaptic()
+                        subjectStore.selectSubject(subject)
+                        selectedTab = .home
+                    } label: {
+                        HStack(spacing: 12) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(subject.name)
+                                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                                    .foregroundStyle(.white)
+                                Text(subject.totalClasses > 0
+                                      ? "\(String(format: "%.0f%%", subject.currentPercentage))"
+                                      : "No classes yet")
+                                    .font(.system(size: 22, weight: .black, design: .rounded))
+                                    .foregroundStyle(
+                                        subject.status == .safe
+                                            ? Color(red: 0.2, green: 0.9, blue: 0.5)
+                                            : Color(red: 1.0, green: 0.45, blue: 0.4)
+                                    )
+                            }
+                            Spacer()
+                            Text(subject.actionChipLabel)
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
+                                .foregroundStyle(.black)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(
+                                    Capsule(style: .continuous)
+                                        .fill(
+                                            subject.status == .safe
+                                                ? Color(red: 0.2, green: 0.9, blue: 0.5)
+                                                : Color(red: 1.0, green: 0.78, blue: 0.28)
+                                        )
+                                )
+                        }
+                        .padding(14)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(Color.white.opacity(0.05))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                        .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                                )
+                        )
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1105,6 +2063,13 @@ struct HomeView: View {
                         .stroke(Color.white.opacity(0.12), lineWidth: 1)
                 )
         )
+        .onAppear {
+            AnalyticsService.shared.log(.dashboardViewed)
+        }
+    }
+
+    private var facultyDashboardCard: some View {
+        allSubjectsDashboardCard
     }
 
     private func progressCard(for result: AttendanceResult) -> some View {
@@ -1183,15 +2148,18 @@ struct HomeView: View {
     }
 
     private var displayResult: AttendanceResult? {
+        let weekClasses = max(1, subjectStore.subjects.first(where: { $0.id == subjectStore.selectedSubjectID })?.weeklySchedule.totalPerWeek ?? 5)
         switch selectedScenario {
         case .current:
             return viewModel.result
-        case .skipOne:
+        case .skipTomorrow:
             return viewModel.simulatedResult(skipMore: 1)
-        case .skipThree:
-            return viewModel.simulatedResult(skipMore: 3)
-        case .attendFive:
-            return viewModel.simulatedResult(attendMore: 5)
+        case .skipThisWeek:
+            return viewModel.simulatedResult(skipMore: weekClasses)
+        case .attendAllWeek:
+            return viewModel.simulatedResult(attendMore: weekClasses)
+        case .custom:
+            return viewModel.simulatedResult(attendMore: customAttendCount, skipMore: customMissCount)
         }
     }
 
@@ -1227,11 +2195,11 @@ struct HomeView: View {
             return "You're below 50%. Focus on attending consistently for the next few weeks."
         }
         if isCriticalRisk(result: result) {
-            return "One more bunk can increase the recovery burden quickly."
+            return "One more \(studentMarket.skipVerb) can increase the recovery burden quickly."
         }
         if result.status == .safe {
             return result.bunkAllowed <= 1
-                ? "1 more bunk = danger ⚠️"
+                ? "1 more \(studentMarket.skipVerb) = danger ⚠️"
                 : "You're chilling 😎 Current attendance is \(String(format: "%.1f%%", result.currentPercentage))."
         }
         return "Your rate is \(String(format: "%.1f%%", result.currentPercentage)). Perfect attendance is mandatory now."
@@ -1239,19 +2207,18 @@ struct HomeView: View {
 
     private func scenarioInsight(baseResult: AttendanceResult?, displayedResult: AttendanceResult) -> String {
         let percentageText = String(format: "%.0f%%", displayedResult.currentPercentage)
-        let statusText = displayedResult.status == .safe ? "System Safe" : "Risk Detected"
 
-        guard selectedScenario != .current, let _ = baseResult else {
+        guard selectedScenario != .current, baseResult != nil else {
             if displayedResult.status == .safe {
-                return "Optimized: \(percentageText) — safely above target."
+                return "You're at \(percentageText) — safely above target."
             }
-            return "Action Required: Attend next \(displayedResult.recoveryNeeded) classes."
+            return "Attend next \(displayedResult.recoveryNeeded) classes to get back on track."
         }
 
         if displayedResult.status == .safe {
-            return "Post Simulation → \(percentageText) (\(statusText))"
+            return "After this → \(percentageText). Still safe."
         }
-        return "Post Simulation → Must attend next \(displayedResult.recoveryNeeded) classes."
+        return "After this → \(percentageText). Attend next \(displayedResult.recoveryNeeded) to recover."
     }
 
     private func actionSummary(for result: AttendanceResult) -> String {
@@ -1363,9 +2330,11 @@ struct HomeView: View {
         shareItems = [message]
         #endif
         isShowingShareSheet = true
+        AnalyticsService.shared.log(.resultShared(status: result.status == .safe ? "safe" : "risk"))
     }
 
     private func requestAppReview() {
+        AnalyticsService.shared.log(.reviewPromptShown)
         #if canImport(StoreKit) && canImport(UIKit)
         guard
             let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene
@@ -1378,9 +2347,10 @@ struct HomeView: View {
 
     private func shareMessage(for result: AttendanceResult) -> String {
         let cta = "Try Bunk Planner: Attendance Track."
+        let verb = studentMarket.skipVerb
         if result.status == .safe {
             if result.bunkAllowed > 0 {
-                return "I can bunk \(result.bunkAllowed) classes safely 😎\n\(cta)"
+                return "I can \(verb) \(result.bunkAllowed) classes safely 😎\n\(cta)"
             }
             return "I'm exactly on the safe attendance line ⚖️\n\(cta)"
         }
@@ -1688,7 +2658,7 @@ struct HomeView: View {
     private func shareHeadline(for result: AttendanceResult) -> String {
         if result.status == .safe {
             if result.bunkAllowed > 0 {
-                return "I can skip \(result.bunkAllowed) class\(result.bunkAllowed == 1 ? "" : "es") and still stay safe."
+                return "I can \(studentMarket.skipVerb) \(result.bunkAllowed) class\(result.bunkAllowed == 1 ? "" : "es") and still stay safe."
             }
             return "I'm exactly on the attendance safe line."
         }
@@ -1701,12 +2671,13 @@ struct HomeView: View {
             return "Threshold cleared. This one is social-post worthy."
         }
 
-        return "No more random bunks. Recovery starts with the very next lecture."
+        return "No more random \(studentMarket.skipNounPlural). Recovery starts with the very next lecture."
     }
 
     private func sharePrimaryAction(for result: AttendanceResult) -> String {
         if result.status == .safe {
-            return result.bunkAllowed > 0 ? "\(result.bunkAllowed) safe bunk\(result.bunkAllowed == 1 ? "" : "s")" : "Hold steady"
+            let noun = result.bunkAllowed == 1 ? studentMarket.skipVerb : studentMarket.skipNounPlural
+            return result.bunkAllowed > 0 ? "\(result.bunkAllowed) safe \(noun)" : "Hold steady"
         }
 
         return "\(result.recoveryNeeded) classes"
@@ -1714,7 +2685,7 @@ struct HomeView: View {
 
     private func sharePrimaryActionDetail(for result: AttendanceResult) -> String {
         if result.status == .safe {
-            return result.bunkAllowed > 0 ? "before crossing the line" : "one bunk changes the story"
+            return result.bunkAllowed > 0 ? "before crossing the line" : "one \(studentMarket.skipVerb) changes the story"
         }
 
         return "needed in a row to recover"
@@ -1766,6 +2737,139 @@ struct HomeView: View {
         return formatter
     }()
 
+    private var weeklySummaryCard: some View {
+        let summary = subjectStore.weeklyAttendanceSummary()
+        let deltaText = summary.percentageDelta >= 0
+            ? "+\(String(format: "%.0f", summary.percentageDelta))%"
+            : "\(String(format: "%.0f", summary.percentageDelta))%"
+
+        return VStack(alignment: .leading, spacing: 14) {
+            Text("This Week")
+                .font(.system(size: 20, weight: .black, design: .rounded))
+                .foregroundStyle(.white)
+
+            HStack(spacing: 10) {
+                insightStat(title: "Attended", value: "\(summary.attendedClasses)")
+                insightStat(title: studentMarket.skipNounPluralTitle, value: "\(summary.missedClasses)")
+                insightStat(title: "Attendance", value: deltaText)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(cardBackground)
+    }
+
+    private var streakAndHighlightsCard: some View {
+        let streak = subjectStore.attendanceStreakDays()
+        let best = subjectStore.bestSubject
+        let worst = subjectStore.worstSubject
+
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                insightStat(title: "Streak", value: "\(streak) days")
+                if let best {
+                    insightStat(title: "Top Performer", value: "\(best.name)\n\(String(format: "%.0f%%", best.currentPercentage))")
+                }
+            }
+
+            if let worst, worst.id != best?.id {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Needs Attention")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.55))
+                    Text("\(worst.name) · \(String(format: "%.0f%%", worst.currentPercentage))")
+                        .font(.system(size: 16, weight: .heavy, design: .rounded))
+                        .foregroundStyle(Color(red: 1.0, green: 0.45, blue: 0.4))
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.white.opacity(0.05))
+                )
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(cardBackground)
+        .onAppear {
+            if streak > 0 {
+                AnalyticsService.shared.log(.streakUpdated(days: streak))
+            }
+        }
+    }
+
+    private var gamificationBadgesCard: some View {
+        let summary = subjectStore.weeklyAttendanceSummary()
+        let streak = subjectStore.attendanceStreakDays()
+        let xp = min(999, streak * 25 + summary.attendedClasses * 10 + subjectStore.subjects.filter { $0.status == .safe }.count * 40)
+
+        let badges: [(title: String, subtitle: String, earned: Bool)] = [
+            ("Perfect Week", "No \(studentMarket.skipVerb) this week", summary.missedClasses == 0 && summary.attendedClasses > 0),
+            ("Recovery Master", "Recovered from below target", subjectStore.subjects.contains { $0.currentPercentage >= $0.requiredPercentage && $0.totalClasses > 0 }),
+            ("Consistency Hero", "Logged attendance 7+ days", streak >= 7)
+        ]
+
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("Attendance Score")
+                    .font(.system(size: 18, weight: .black, design: .rounded))
+                    .foregroundStyle(.white)
+                Spacer()
+                Text("\(xp) XP")
+                    .font(.system(size: 16, weight: .heavy, design: .rounded))
+                    .foregroundStyle(Color(red: 1.0, green: 0.78, blue: 0.28))
+            }
+
+            ForEach(Array(badges.enumerated()), id: \.offset) { _, badge in
+                HStack(spacing: 12) {
+                    Image(systemName: badge.earned ? "seal.fill" : "seal")
+                        .foregroundStyle(badge.earned ? Color(red: 1.0, green: 0.78, blue: 0.28) : .white.opacity(0.35))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(badge.title)
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white.opacity(badge.earned ? 1 : 0.55))
+                        Text(badge.subtitle)
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.5))
+                    }
+                    Spacer()
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(cardBackground)
+    }
+
+    private func insightStat(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.5))
+            Text(value)
+                .font(.system(size: 16, weight: .heavy, design: .rounded))
+                .foregroundStyle(.white)
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+        )
+    }
+
+    private var cardBackground: some View {
+        RoundedRectangle(cornerRadius: 20, style: .continuous)
+            .fill(Color.white.opacity(0.06))
+            .overlay(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+            )
+    }
+
     private var trendGraphCard: some View {
         let points = trendPointsForSelectedSubject()
         let latest = points.last?.percentage ?? 0
@@ -1809,10 +2913,16 @@ struct HomeView: View {
                         .stroke(Color.white.opacity(0.12), lineWidth: 1)
                 )
         )
+        .onAppear {
+            if points.count >= 2 {
+                AnalyticsService.shared.log(.trendViewed)
+            }
+        }
     }
 
     private func openTimetableEditor(for subjectID: UUID) {
         triggerLightHaptic()
+        AnalyticsService.shared.log(.timetableEditorOpened)
         editingTimetableSubjectID = subjectID
     }
 
@@ -1918,15 +3028,22 @@ struct HomeView: View {
     }
 
     private func simulatedScenarioCounts() -> (attended: Int, total: Int, label: String)? {
+        let weekClasses = max(1, subjectStore.subjects.first(where: { $0.id == subjectStore.selectedSubjectID })?.weeklySchedule.totalPerWeek ?? 5)
         switch selectedScenario {
         case .current:
             return nil
-        case .skipOne:
-            return (viewModel.attendedClasses, viewModel.totalClasses + 1, "skipping 1")
-        case .skipThree:
-            return (viewModel.attendedClasses, viewModel.totalClasses + 3, "skipping 3")
-        case .attendFive:
-            return (viewModel.attendedClasses + 5, viewModel.totalClasses + 5, "attending 5")
+        case .skipTomorrow:
+            return (viewModel.attendedClasses, viewModel.totalClasses + 1, "skipping tomorrow")
+        case .skipThisWeek:
+            return (viewModel.attendedClasses, viewModel.totalClasses + weekClasses, "skipping this week")
+        case .attendAllWeek:
+            return (viewModel.attendedClasses + weekClasses, viewModel.totalClasses + weekClasses, "attending all week")
+        case .custom:
+            return (
+                viewModel.attendedClasses + customAttendCount,
+                viewModel.totalClasses + customAttendCount + customMissCount,
+                "custom what-if"
+            )
         }
     }
 
@@ -1974,26 +3091,61 @@ struct HomeView: View {
         return isCriticalRisk(result: result) ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill"
     }
 
-    private func floatingActionBanner(for result: AttendanceResult) -> some View {
-        ResultCardView(
-            title: result.status == .safe ? "Best next move" : "Recovery plan",
-            value: actionSummary(for: result),
-            subtitle: planSubtitle(for: result),
-            tint: result.status == .safe ? Color(red: 0.2, green: 0.9, blue: 0.5) : Color(red: 1.0, green: 0.3, blue: 0.3),
+    private func floatingActionBanner(for result: AttendanceResult?) -> some View {
+        let copy = contextualFABCopy(for: result)
+        return ResultCardView(
+            title: copy.title,
+            value: copy.value,
+            subtitle: copy.subtitle,
+            tint: copy.tint,
             alignment: .center,
             isEmphasized: true
         )
         .shadow(color: Color.black.opacity(0.45), radius: 18, x: 0, y: 8)
+        .onAppear {
+            AnalyticsService.shared.log(.fabBannerShown(action: copy.analytics))
+        }
+    }
+
+    private func contextualFABCopy(for result: AttendanceResult?) -> (title: String, value: String, subtitle: String, tint: Color, analytics: String) {
+        let hour = Calendar.current.component(.hour, from: Date())
+        let loggedToday = subjectStore.hasLoggedToday()
+        let green = Color(red: 0.2, green: 0.9, blue: 0.5)
+        let red = Color(red: 1.0, green: 0.3, blue: 0.3)
+        let cyan = Color(red: 0.32, green: 0.84, blue: 1.0)
+
+        if !hasAttendanceData {
+            return ("Before semester", "Create your first subject", "Get Started", cyan, "create_subject")
+        }
+        if !loggedToday {
+            if hour < 12 {
+                return ("Morning", "Log Today's Attendance", "Takes one tap", cyan, "log_morning")
+            }
+            if hour >= 17 {
+                return ("Evening", "Don't forget today's class", "Log before you sleep", .orange, "log_evening")
+            }
+            return ("Today", "Log Today's Attendance", "Keep your streak alive", cyan, "log_today")
+        }
+        guard let result else {
+            return ("Today", "Log Today's Attendance", "Keep tracking", cyan, "log_today")
+        }
+        if isPerfectAttendance(result: result) {
+            return ("Perfect attendance", "Maintain your streak", "You're crushing it", green, "maintain_streak")
+        }
+        if isRecoveryMode(result: result) || result.status == .risk {
+            return ("Recovery mode", "Start Recovery", "Attend next \(max(1, result.recoveryNeeded))", red, "start_recovery")
+        }
+        return ("Best next move", "Skip \(result.bunkAllowed) safely", "You're above target", green, "skip_plan")
     }
 
     private func colorForRiskLevel(_ level: RiskAlertLevel) -> Color {
         switch level {
         case .stable:
-            return .green
+            return Color(red: 0.2, green: 0.9, blue: 0.5)
         case .warning:
-            return .orange
+            return Color(red: 1.0, green: 0.84, blue: 0.2)
         case .critical:
-            return .red
+            return Color(red: 1.0, green: 0.35, blue: 0.4)
         }
     }
 }
@@ -2075,7 +3227,9 @@ enum KeyboardType {
 private enum HomeTab: CaseIterable {
     case home
     case insights
+    case log
     case overview
+    case academics
 
     var systemImage: String {
         switch self {
@@ -2083,8 +3237,12 @@ private enum HomeTab: CaseIterable {
             return "house.fill"
         case .insights:
             return "chart.line.uptrend.xyaxis"
+        case .log:
+            return "calendar"
         case .overview:
             return "books.vertical.fill"
+        case .academics:
+            return "graduationcap.fill"
         }
     }
 
@@ -2094,17 +3252,36 @@ private enum HomeTab: CaseIterable {
             return "Home"
         case .insights:
             return "Insights"
+        case .log:
+            return "Log"
         case .overview:
             return "Overview"
+        case .academics:
+            return studentMarketPrefersModules ? "Modules" : "Grades"
+        }
+    }
+
+    private var studentMarketPrefersModules: Bool {
+        StudentMarketStore.current == .unitedKingdom
+    }
+
+    var analyticsScreen: AppScreen {
+        switch self {
+        case .home: return .home
+        case .insights: return .insights
+        case .log: return .log
+        case .overview: return .overview
+        case .academics: return .academics
         }
     }
 }
 
 private enum ScenarioAction: CaseIterable, Identifiable {
     case current
-    case skipOne
-    case skipThree
-    case attendFive
+    case skipTomorrow
+    case skipThisWeek
+    case attendAllWeek
+    case custom
 
     var id: Self { self }
 
@@ -2112,12 +3289,14 @@ private enum ScenarioAction: CaseIterable, Identifiable {
         switch self {
         case .current:
             return "Current"
-        case .skipOne:
-            return "Skip 1"
-        case .skipThree:
-            return "Skip 3"
-        case .attendFive:
-            return "Attend 5"
+        case .skipTomorrow:
+            return "Skip Tomorrow"
+        case .skipThisWeek:
+            return "Skip This Week"
+        case .attendAllWeek:
+            return "Attend All Week"
+        case .custom:
+            return "Custom"
         }
     }
 
@@ -2125,12 +3304,14 @@ private enum ScenarioAction: CaseIterable, Identifiable {
         switch self {
         case .current:
             return "current"
-        case .skipOne:
-            return "skipping 1"
-        case .skipThree:
-            return "skipping 3"
-        case .attendFive:
-            return "attending 5"
+        case .skipTomorrow:
+            return "skip_tomorrow"
+        case .skipThisWeek:
+            return "skip_this_week"
+        case .attendAllWeek:
+            return "attend_all_week"
+        case .custom:
+            return "custom"
         }
     }
 }
@@ -2173,12 +3354,86 @@ private struct ActivityView: UIViewControllerRepresentable {
     let activityItems: [Any]
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+        let controller = UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+        controller.completionWithItemsHandler = { _, completed, _, _ in
+            if completed == false {
+                AnalyticsService.shared.log(.shareCancelled)
+            }
+        }
+        return controller
     }
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 #endif
+
+private struct SubjectPickerSheet: View {
+    @ObservedObject var subjectStore: SubjectStore
+    var onManageSubjects: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var newName = ""
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    ForEach(subjectStore.subjects) { subject in
+                        Button {
+                            subjectStore.selectSubject(subject)
+                            dismiss()
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(subject.name)
+                                        .font(.system(size: 16, weight: .bold, design: .rounded))
+                                        .foregroundStyle(.primary)
+                                    Text(subject.totalClasses > 0
+                                          ? "\(String(format: "%.0f%%", subject.currentPercentage))"
+                                          : "No classes yet")
+                                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if subject.id == subjectStore.selectedSubjectID {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(Color(red: 0.2, green: 0.9, blue: 0.5))
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Section {
+                    HStack {
+                        TextField("New subject name", text: $newName)
+                        Button("Add") {
+                            let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+                            subjectStore.addSubject(named: name.isEmpty ? nil : name)
+                            newName = ""
+                        }
+                        .disabled(false)
+                    }
+
+                    Button {
+                        dismiss()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                            onManageSubjects()
+                        }
+                    } label: {
+                        Label("Manage subjects & timetables", systemImage: "slider.horizontal.3")
+                    }
+                }
+            }
+            .navigationTitle("Subjects")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+}
 
 private struct SubjectListView: View {
     @ObservedObject var subjectStore: SubjectStore
@@ -2303,6 +3558,7 @@ private struct SubjectListView: View {
                         subjectID: subjectID
                     )
                     .preferredColorScheme(.dark)
+                    .analyticsScreen(.timetableEditor)
                 }
             }
         }
@@ -2351,10 +3607,10 @@ private struct TimetableEditorSheet: View {
                     }
                 }
 
-                Section("Auto-Mark Expected Classes") {
-                    Stepper("Weeks to project: \(projectionWeeks)", value: $projectionWeeks, in: 1...16)
-                    Stepper("Holiday classes to exclude: \(holidayClassCount)", value: $holidayClassCount, in: 0...80)
-                    Stepper("Expected absences: \(expectedAbsences)", value: $expectedAbsences, in: 0...80)
+                Section("Forecast Assumptions") {
+                    Stepper("Semester Remaining: \(projectionWeeks) week\(projectionWeeks == 1 ? "" : "s")", value: $projectionWeeks, in: 1...16)
+                    Stepper("College Holidays: \(holidayClassCount) cancelled", value: $holidayClassCount, in: 0...80)
+                    Stepper("Planned \(StudentMarketStore.current.skipNounPluralTitle): \(expectedAbsences)", value: $expectedAbsences, in: 0...80)
 
                     let expected = CalculationService.projectedTotalClasses(
                         schedule: schedule,

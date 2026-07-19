@@ -40,6 +40,7 @@ final class AttendanceViewModel: ObservableObject {
     private let defaults: UserDefaults
     private var cancellables = Set<AnyCancellable>()
     private var lastSafeCountSignature: String?
+    private var lastLoggedCalcSignature: String?
     private var suppressReviewTracking = false
     private var isApplyingSubjectLoad = false
 
@@ -92,6 +93,35 @@ final class AttendanceViewModel: ObservableObject {
         let computedResult = makeResult(from: input)
         result = computedResult
         trackReviewTriggerIfNeeded(input: input, result: computedResult)
+        logCalculationIfChanged(input: input, result: computedResult)
+    }
+
+    /// Logs a `calculation_completed` event only when the produced result is
+    /// meaningfully different, so live (debounced) recalculation on each keystroke
+    /// doesn't flood analytics.
+    private func logCalculationIfChanged(input: AttendanceInput, result: AttendanceResult) {
+        let signature = "\(result.status)|\(Int(result.currentPercentage.rounded()))|\(Int(input.requiredPercentage.rounded()))"
+        guard signature != lastLoggedCalcSignature else { return }
+        lastLoggedCalcSignature = signature
+        AnalyticsService.shared.log(.calculationCompleted(
+            status: result.status == .safe ? "safe" : "risk",
+            currentPercentage: Int(result.currentPercentage.rounded()),
+            requiredPercentage: Int(input.requiredPercentage.rounded())
+        ))
+        let riskStatus: String
+        if result.status == .safe {
+            riskStatus = "safe"
+        } else if result.recoveryNeeded >= 5 {
+            riskStatus = "critical"
+        } else {
+            riskStatus = "at_risk"
+        }
+        if riskStatus != "safe" {
+            AnalyticsService.shared.log(.attendanceAtRiskShown(
+                currentPct: Int(result.currentPercentage.rounded()),
+                status: riskStatus
+            ))
+        }
     }
 
     func simulatedResult(attendMore: Int = 0, skipMore: Int = 0) -> AttendanceResult? {
@@ -113,10 +143,13 @@ final class AttendanceViewModel: ObservableObject {
         let formattedValue = Self.formattedPercentageString(for: boundedValue)
         defaults.set(formattedValue, forKey: Keys.defaultRequiredPercentage)
         requiredPercentageInput = formattedValue
+        AnalyticsService.shared.log(.defaultRequiredPercentageSaved(value: Int(boundedValue.rounded())))
     }
 
     func applyRequiredPercentagePreset(_ value: Double) {
-        requiredPercentageInput = Self.formattedPercentageString(for: min(max(value, 0), 100))
+        let bounded = min(max(value, 0), 100)
+        requiredPercentageInput = Self.formattedPercentageString(for: bounded)
+        AnalyticsService.shared.log(.requiredPercentagePresetApplied(value: Int(bounded.rounded())))
     }
 
     func resetInputs() {
@@ -124,6 +157,7 @@ final class AttendanceViewModel: ObservableObject {
         attendedClassesInput = ""
         requiredPercentageInput = Self.formattedPercentageString(for: defaultRequiredPercentage)
         validationMessage = nil
+        AnalyticsService.shared.log(.inputsReset)
     }
 
     func loadSubject(totalClasses: Int, attendedClasses: Int, requiredPercentage: Double) {
@@ -274,6 +308,9 @@ final class SubjectStore: ObservableObject {
     @Published var selectedSubjectID: UUID? {
         didSet {
             guard selectedSubjectID != oldValue else { return }
+            if oldValue != nil, selectedSubjectID != nil {
+                AnalyticsService.shared.log(.subjectSwitched(totalSubjects: subjects.count))
+            }
             persistSelectedSubjectID()
             loadSelectedSubjectIntoCalculator()
         }
@@ -301,6 +338,89 @@ final class SubjectStore: ObservableObject {
             averageAttendance: average,
             mostAtRiskSubject: mostAtRisk
         )
+    }
+
+    var bestSubject: SubjectSummary? {
+        subjects.filter { $0.totalClasses > 0 }.max(by: { $0.currentPercentage < $1.currentPercentage })
+    }
+
+    var worstSubject: SubjectSummary? {
+        subjects.filter { $0.totalClasses > 0 }.min(by: { $0.currentPercentage < $1.currentPercentage })
+    }
+
+    /// Consecutive recent days (across selected subject) with at least one attended class.
+    func attendanceStreakDays(referenceDate: Date = Date()) -> Int {
+        guard let subjectID = selectedSubjectID else { return 0 }
+        let calendar = Calendar.current
+        var streak = 0
+        var day = calendar.startOfDay(for: referenceDate)
+
+        for _ in 0..<120 {
+            if let entry = logEntry(subjectID: subjectID, date: day) {
+                if entry.isHoliday {
+                    // Holidays don't break the streak.
+                } else if entry.attendedContribution > 0 {
+                    streak += 1
+                } else if entry.totalContribution > 0 {
+                    break
+                }
+            } else if classesScheduledToday(for: subjectID, on: day) > 0 {
+                // Unmarked scheduled day — only break if it's in the past.
+                if calendar.compare(day, to: calendar.startOfDay(for: referenceDate), toGranularity: .day) == .orderedAscending {
+                    break
+                }
+            }
+            guard let previous = calendar.date(byAdding: .day, value: -1, to: day) else { break }
+            day = previous
+        }
+        return streak
+    }
+
+    func weeklyAttendanceSummary(referenceDate: Date = Date()) -> WeeklyAttendanceSummary {
+        let calendar = Calendar.current
+        guard let week = calendar.dateInterval(of: .weekOfYear, for: referenceDate) else {
+            return WeeklyAttendanceSummary(attendedClasses: 0, missedClasses: 0, holidayDays: 0, percentageDelta: 0)
+        }
+
+        var attended = 0
+        var missed = 0
+        var holidays = 0
+
+        for subject in subjects {
+            var day = week.start
+            while day < week.end {
+                if let entry = logEntry(subjectID: subject.id, date: day) {
+                    if entry.isHoliday {
+                        holidays += 1
+                    } else {
+                        attended += entry.attendedContribution
+                        missed += max(0, entry.totalContribution - entry.attendedContribution)
+                    }
+                }
+                guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
+                day = next
+            }
+        }
+
+        let points = selectedSubjectID.map { AttendanceTrendStore.load(subjectID: $0) } ?? []
+        let delta: Double
+        if points.count >= 2 {
+            delta = points[points.count - 1].percentage - points[points.count - 2].percentage
+        } else {
+            delta = 0
+        }
+
+        return WeeklyAttendanceSummary(
+            attendedClasses: attended,
+            missedClasses: missed,
+            holidayDays: holidays,
+            percentageDelta: delta
+        )
+    }
+
+    func hasLoggedToday(for subjectID: UUID? = nil, date: Date = Date()) -> Bool {
+        guard let id = subjectID ?? selectedSubjectID else { return false }
+        return logEntry(subjectID: id, date: date) != nil
     }
 
     private var selectedSubject: SubjectSummary? {
@@ -348,6 +468,7 @@ final class SubjectStore: ObservableObject {
         Task(priority: .utility) { @MainActor in
             NotificationService.requestAuthorizationIfNeeded()
             NotificationService.scheduleClassReminder()
+            NotificationService.scheduleWeeklyEngagementReminders()
         }
     }
 
@@ -365,6 +486,8 @@ final class SubjectStore: ObservableObject {
         saveContext()
         reloadSubjects()
         selectedSubjectID = entity.id
+        AnalyticsService.shared.log(.subjectAdded(totalSubjects: subjects.count))
+        AnalyticsUserProfile.sync(subjectStore: self)
     }
 
     func deleteSubjects(at offsets: IndexSet) {
@@ -382,6 +505,8 @@ final class SubjectStore: ObservableObject {
             if let currentID = selectedSubjectID, subjects.contains(where: { $0.id == currentID }) == false {
                 selectedSubjectID = subjects.first?.id
             }
+            AnalyticsService.shared.log(.subjectDeleted(totalSubjects: subjects.count))
+            AnalyticsUserProfile.sync(subjectStore: self)
         }
     }
 
@@ -400,16 +525,22 @@ final class SubjectStore: ObservableObject {
             if let currentID = selectedSubjectID, currentID == id {
                 selectedSubjectID = subjects.first?.id
             }
+            AnalyticsService.shared.log(.subjectDeleted(totalSubjects: subjects.count))
+            AnalyticsUserProfile.sync(subjectStore: self)
         }
     }
 
     func selectSubject(_ subject: SubjectSummary) {
+        guard selectedSubjectID != subject.id else { return }
         selectedSubjectID = subject.id
+        AnalyticsService.shared.log(.subjectSelected)
     }
 
     func selectSubject(id: UUID) {
         guard subjects.contains(where: { $0.id == id }) else { return }
+        guard selectedSubjectID != id else { return }
         selectedSubjectID = id
+        AnalyticsService.shared.log(.subjectSelected)
     }
 
     func renameSubject(id: UUID, to name: String) {
@@ -424,6 +555,7 @@ final class SubjectStore: ObservableObject {
         entity.updatedAt = Date()
         saveContext()
         reloadSubjects()
+        AnalyticsService.shared.log(.subjectRenamed)
     }
 
     func weeklySchedule(for subjectID: UUID) -> WeeklySchedule {
@@ -443,6 +575,8 @@ final class SubjectStore: ObservableObject {
         entity.updatedAt = Date()
         saveContext()
         reloadSubjects()
+        AnalyticsService.shared.log(.timetableUpdated(classesPerWeek: schedule.totalPerWeek))
+        AnalyticsUserProfile.sync(subjectStore: self)
     }
 
     func applyWeeklySchedule(for subjectID: UUID, addToExisting: Bool) {
@@ -467,6 +601,7 @@ final class SubjectStore: ObservableObject {
         if selectedSubjectID == subjectID {
             loadSelectedSubjectIntoCalculator()
         }
+        AnalyticsService.shared.log(.timetableProjectionApplied)
     }
 
     func applyProjectedSchedule(
@@ -509,12 +644,19 @@ final class SubjectStore: ObservableObject {
         }
     }
 
-    func subjectForecasts(weeks: Int, holidayClassCount: Int, expectedAbsences: Int) -> [SubjectForecast] {
+    func subjectForecasts(
+        weeks: Int,
+        holidayClassCount: Int,
+        expectedAbsences: Int,
+        fallbackClassesPerWeek: Int = 5
+    ) -> [SubjectForecast] {
         subjects.map { subject in
+            let hasTimetable = subject.weeklySchedule.totalPerWeek > 0
             let expectedClasses = CalculationService.projectedTotalClasses(
                 schedule: subject.weeklySchedule,
                 weeks: weeks,
-                holidayClassCount: holidayClassCount
+                holidayClassCount: holidayClassCount,
+                fallbackClassesPerWeek: hasTimetable ? 0 : fallbackClassesPerWeek
             )
             let projection = CalculationService.forecast(
                 attended: subject.attendedClasses,
@@ -530,10 +672,212 @@ final class SubjectStore: ObservableObject {
                 forecastedPercentage: projection.forecastedPercentage,
                 requiredPercentage: subject.requiredPercentage,
                 expectedClasses: expectedClasses,
-                riskLevel: projection.riskLevel
+                forecastAttended: projection.attendedClasses,
+                forecastTotal: projection.totalClasses,
+                riskLevel: projection.riskLevel,
+                usedFallbackSchedule: hasTimetable == false
             )
         }
         .sorted { $0.subjectName.localizedCaseInsensitiveCompare($1.subjectName) == .orderedAscending }
+    }
+
+    // MARK: - Daily Attendance Log
+
+    /// Number of classes scheduled today for a subject, based on its timetable.
+    func classesScheduledToday(for subjectID: UUID, on date: Date = Date()) -> Int {
+        guard let subject = subjects.first(where: { $0.id == subjectID }) else { return 0 }
+        return subject.weeklySchedule.classes(on: date)
+    }
+
+    /// The saved log entry for a subject on a specific day, if any.
+    func logEntry(subjectID: UUID, date: Date) -> AttendanceLogEntry? {
+        let day = Calendar.current.startOfDay(for: date)
+        guard let entity = fetchRecordEntity(subjectID: subjectID, day: day) else { return nil }
+        return logEntry(from: entity)
+    }
+
+    /// All log entries for a subject within the month containing `month`.
+    func logEntries(subjectID: UUID, month: Date) -> [AttendanceLogEntry] {
+        let calendar = Calendar.current
+        guard
+            let interval = calendar.dateInterval(of: .month, for: month)
+        else {
+            return []
+        }
+
+        let request = AttendanceRecordEntity.fetchRequest()
+        request.predicate = NSPredicate(
+            format: "subjectID == %@ AND date >= %@ AND date < %@",
+            subjectID as CVarArg,
+            interval.start as NSDate,
+            interval.end as NSDate
+        )
+        request.sortDescriptors = [NSSortDescriptor(key: "date", ascending: true)]
+
+        let fetched = (try? context.fetch(request)) ?? []
+        return fetched.map(logEntry(from:))
+    }
+
+    /// Adds or updates a day's attendance mark, applying the change additively to
+    /// the subject's running total/attended counters.
+    func markDay(
+        subjectID: UUID,
+        date: Date,
+        attendedCount: Int,
+        scheduledCount: Int,
+        isHoliday: Bool,
+        source: String = "unknown"
+    ) {
+        let day = Calendar.current.startOfDay(for: date)
+
+        let subjectRequest = SubjectEntity.fetchRequest()
+        subjectRequest.fetchLimit = 1
+        subjectRequest.predicate = NSPredicate(format: "id == %@", subjectID as CVarArg)
+        guard let subjectEntity = try? context.fetch(subjectRequest).first else { return }
+
+        let boundedScheduled = max(0, scheduledCount)
+        let boundedAttended = min(max(0, attendedCount), boundedScheduled)
+
+        let record = fetchRecordEntity(subjectID: subjectID, day: day)
+        let previousEntry = record.map(logEntry(from:))
+
+        if let record {
+            let previous = logEntry(from: record)
+            subjectEntity.totalClasses -= Int32(previous.totalContribution)
+            subjectEntity.attendedClasses -= Int32(previous.attendedContribution)
+        }
+
+        let newEntry = AttendanceLogEntry(
+            subjectID: subjectID,
+            date: day,
+            scheduledClasses: boundedScheduled,
+            attendedClasses: boundedAttended,
+            isHoliday: isHoliday
+        )
+
+        subjectEntity.totalClasses += Int32(newEntry.totalContribution)
+        subjectEntity.attendedClasses += Int32(newEntry.attendedContribution)
+
+        subjectEntity.totalClasses = max(0, subjectEntity.totalClasses)
+        subjectEntity.attendedClasses = min(max(0, subjectEntity.attendedClasses), subjectEntity.totalClasses)
+        subjectEntity.updatedAt = Date()
+
+        let entity = record ?? AttendanceRecordEntity(context: context)
+        if record == nil {
+            entity.id = newEntry.id
+        }
+        entity.subjectID = subjectID
+        entity.date = day
+        entity.scheduledClasses = Int32(boundedScheduled)
+        entity.attendedClasses = Int32(boundedAttended)
+        entity.isHoliday = isHoliday
+        entity.updatedAt = newEntry.updatedAt
+
+        saveContext()
+        finalizeAfterCounterChange(subjectEntity: subjectEntity)
+
+        let status: String
+        if isHoliday {
+            status = "holiday"
+        } else if boundedAttended <= 0 {
+            status = "missed"
+        } else if boundedAttended >= boundedScheduled {
+            status = "attended"
+        } else {
+            status = "partial"
+        }
+        AnalyticsService.shared.log(.dayMarked(
+            status: status,
+            scheduled: boundedScheduled,
+            attended: boundedAttended,
+            source: source
+        ))
+        AnalyticsUserProfile.recordDayMarked(source: source)
+
+        if source == "mark_today" || source == "day_editor" {
+            let markChanged: Bool
+            if let previousEntry {
+                markChanged = previousEntry.scheduledClasses != boundedScheduled
+                    || previousEntry.attendedClasses != boundedAttended
+                    || previousEntry.isHoliday != isHoliday
+            } else {
+                markChanged = true
+            }
+            if markChanged {
+                AdMobInterstitialService.shared.tryShowAfterDayMarked()
+            }
+        }
+        AnalyticsUserProfile.sync(subjectStore: self)
+    }
+
+    /// Removes a day's mark and reverses its contribution to the counters.
+    func clearDay(subjectID: UUID, date: Date, source: String = "unknown") {
+        let day = Calendar.current.startOfDay(for: date)
+        guard let record = fetchRecordEntity(subjectID: subjectID, day: day) else { return }
+
+        let subjectRequest = SubjectEntity.fetchRequest()
+        subjectRequest.fetchLimit = 1
+        subjectRequest.predicate = NSPredicate(format: "id == %@", subjectID as CVarArg)
+
+        if let subjectEntity = try? context.fetch(subjectRequest).first {
+            let previous = logEntry(from: record)
+            subjectEntity.totalClasses = max(0, subjectEntity.totalClasses - Int32(previous.totalContribution))
+            subjectEntity.attendedClasses = max(0, subjectEntity.attendedClasses - Int32(previous.attendedContribution))
+            subjectEntity.attendedClasses = min(subjectEntity.attendedClasses, subjectEntity.totalClasses)
+            subjectEntity.updatedAt = Date()
+            context.delete(record)
+            saveContext()
+            finalizeAfterCounterChange(subjectEntity: subjectEntity)
+        } else {
+            context.delete(record)
+            saveContext()
+            reloadSubjects()
+        }
+        AnalyticsService.shared.log(.dayCleared(source: source))
+    }
+
+    private func finalizeAfterCounterChange(subjectEntity: SubjectEntity) {
+        reloadSubjects()
+
+        if selectedSubjectID == subjectEntity.id {
+            loadSelectedSubjectIntoCalculator()
+        }
+
+        scheduleNotificationIfNeeded(
+            subjectName: subjectEntity.name,
+            totalClasses: Int(subjectEntity.totalClasses),
+            attendedClasses: Int(subjectEntity.attendedClasses),
+            requiredPercentage: subjectEntity.requiredPercentage
+        )
+        recordTrendIfNeeded(
+            subjectID: subjectEntity.id,
+            totalClasses: Int(subjectEntity.totalClasses),
+            attendedClasses: Int(subjectEntity.attendedClasses),
+            requiredPercentage: subjectEntity.requiredPercentage
+        )
+    }
+
+    private func fetchRecordEntity(subjectID: UUID, day: Date) -> AttendanceRecordEntity? {
+        let request = AttendanceRecordEntity.fetchRequest()
+        request.fetchLimit = 1
+        request.predicate = NSPredicate(
+            format: "subjectID == %@ AND date == %@",
+            subjectID as CVarArg,
+            day as NSDate
+        )
+        return try? context.fetch(request).first
+    }
+
+    private func logEntry(from entity: AttendanceRecordEntity) -> AttendanceLogEntry {
+        AttendanceLogEntry(
+            id: entity.id,
+            subjectID: entity.subjectID,
+            date: entity.date,
+            scheduledClasses: Int(entity.scheduledClasses),
+            attendedClasses: Int(entity.attendedClasses),
+            isHoliday: entity.isHoliday,
+            updatedAt: entity.updatedAt
+        )
     }
 
     private func bindCalculatorChanges() {
@@ -886,9 +1230,60 @@ final class PersistenceController {
         updatedAt.defaultValue = Date()
 
         entity.properties = [id, name, totalClasses, attendedClasses, requiredPercentage, scheduleData, createdAt, updatedAt]
-        model.entities = [entity]
+
+        model.entities = [entity, makeRecordEntity()]
 
         return model
+    }
+
+    private static func makeRecordEntity() -> NSEntityDescription {
+        let entity = NSEntityDescription()
+        entity.name = "AttendanceRecordEntity"
+        entity.managedObjectClassName = NSStringFromClass(AttendanceRecordEntity.self)
+
+        let id = NSAttributeDescription()
+        id.name = "id"
+        id.attributeType = .UUIDAttributeType
+        id.isOptional = false
+
+        let subjectID = NSAttributeDescription()
+        subjectID.name = "subjectID"
+        subjectID.attributeType = .UUIDAttributeType
+        subjectID.isOptional = false
+
+        let date = NSAttributeDescription()
+        date.name = "date"
+        date.attributeType = .dateAttributeType
+        date.isOptional = false
+        date.defaultValue = Date()
+
+        let scheduledClasses = NSAttributeDescription()
+        scheduledClasses.name = "scheduledClasses"
+        scheduledClasses.attributeType = .integer32AttributeType
+        scheduledClasses.isOptional = false
+        scheduledClasses.defaultValue = 0
+
+        let attendedClasses = NSAttributeDescription()
+        attendedClasses.name = "attendedClasses"
+        attendedClasses.attributeType = .integer32AttributeType
+        attendedClasses.isOptional = false
+        attendedClasses.defaultValue = 0
+
+        let isHoliday = NSAttributeDescription()
+        isHoliday.name = "isHoliday"
+        isHoliday.attributeType = .booleanAttributeType
+        isHoliday.isOptional = false
+        isHoliday.defaultValue = false
+
+        let updatedAt = NSAttributeDescription()
+        updatedAt.name = "updatedAt"
+        updatedAt.attributeType = .dateAttributeType
+        updatedAt.isOptional = false
+        updatedAt.defaultValue = Date()
+
+        entity.properties = [id, subjectID, date, scheduledClasses, attendedClasses, isHoliday, updatedAt]
+
+        return entity
     }
 }
 
@@ -907,5 +1302,22 @@ final class SubjectEntity: NSManagedObject {
 extension SubjectEntity {
     @nonobjc class func fetchRequest() -> NSFetchRequest<SubjectEntity> {
         NSFetchRequest<SubjectEntity>(entityName: "SubjectEntity")
+    }
+}
+
+@objc(AttendanceRecordEntity)
+final class AttendanceRecordEntity: NSManagedObject {
+    @NSManaged var id: UUID
+    @NSManaged var subjectID: UUID
+    @NSManaged var date: Date
+    @NSManaged var scheduledClasses: Int32
+    @NSManaged var attendedClasses: Int32
+    @NSManaged var isHoliday: Bool
+    @NSManaged var updatedAt: Date
+}
+
+extension AttendanceRecordEntity {
+    @nonobjc class func fetchRequest() -> NSFetchRequest<AttendanceRecordEntity> {
+        NSFetchRequest<AttendanceRecordEntity>(entityName: "AttendanceRecordEntity")
     }
 }

@@ -66,9 +66,13 @@ enum CalculationService {
     static func projectedTotalClasses(
         schedule: WeeklySchedule,
         weeks: Int,
-        holidayClassCount: Int
+        holidayClassCount: Int,
+        fallbackClassesPerWeek: Int = 0
     ) -> Int {
-        let scheduled = max(0, schedule.totalPerWeek * max(weeks, 0))
+        let classesPerWeek = schedule.totalPerWeek > 0
+            ? schedule.totalPerWeek
+            : max(0, fallbackClassesPerWeek)
+        let scheduled = max(0, classesPerWeek * max(weeks, 0))
         return max(0, scheduled - max(holidayClassCount, 0))
     }
 

@@ -110,15 +110,23 @@ enum AppTrackingService {
     #endif
 
     private static func logStatus(_ status: TrackingAuthorization) {
+        let analyticsStatus: String
         switch status {
         case .authorized:
+            analyticsStatus = "authorized"
             print("[ATT] Status: authorized")
         case .denied:
+            analyticsStatus = "denied"
             print("[ATT] Status: denied")
         case .restricted:
+            analyticsStatus = "restricted"
             print("[ATT] Status: restricted")
         case .notDetermined:
+            analyticsStatus = "not_determined"
             print("[ATT] Status: notDetermined")
+        }
+        if status != .notDetermined {
+            AnalyticsService.shared.log(.attTrackingResult(status: analyticsStatus))
         }
     }
 }

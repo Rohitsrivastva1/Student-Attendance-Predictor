@@ -55,7 +55,7 @@ enum AttendanceStatus: String, Equatable {
 }
 
 enum RiskAlertLevel: String {
-    case stable = "Stable"
+    case stable = "Safe"
     case warning = "Warning"
     case critical = "Critical"
 }
@@ -76,6 +76,31 @@ struct SubjectSummary: Identifiable, Equatable {
     var status: AttendanceStatus {
         currentPercentage >= requiredPercentage ? .safe : .risk
     }
+
+    var bunkAllowed: Int {
+        CalculationService.maxBunk(
+            attended: attendedClasses,
+            total: totalClasses,
+            required: requiredPercentage
+        )
+    }
+
+    var recoveryNeeded: Int {
+        CalculationService.requiredClasses(
+            attended: attendedClasses,
+            total: totalClasses,
+            required: requiredPercentage
+        )
+    }
+
+    /// Short action chip for Overview cards: "Safe", "Skip N", or "Recover".
+    var actionChipLabel: String {
+        guard totalClasses > 0 else { return "Start" }
+        if status == .safe {
+            return bunkAllowed > 0 ? "Skip \(bunkAllowed)" : "Safe"
+        }
+        return "Recover"
+    }
 }
 
 struct SubjectForecast: Identifiable, Equatable {
@@ -85,7 +110,58 @@ struct SubjectForecast: Identifiable, Equatable {
     let forecastedPercentage: Double
     let requiredPercentage: Double
     let expectedClasses: Int
+    let forecastAttended: Int
+    let forecastTotal: Int
     let riskLevel: RiskAlertLevel
+    /// True when this subject has no weekly timetable and the forecast used the shared classes/week estimate.
+    let usedFallbackSchedule: Bool
+
+    var recoveryNeeded: Int {
+        CalculationService.requiredClasses(
+            attended: forecastAttended,
+            total: forecastTotal,
+            required: requiredPercentage
+        )
+    }
+
+    var bunkAllowedAfterProjection: Int {
+        CalculationService.maxBunk(
+            attended: forecastAttended,
+            total: forecastTotal,
+            required: requiredPercentage
+        )
+    }
+
+    var isStableProjection: Bool {
+        abs(forecastedPercentage - currentPercentage) < 0.5
+    }
+
+    var willFallBelowTarget: Bool {
+        forecastedPercentage < requiredPercentage
+    }
+
+    /// The one-line answer students care about after projecting.
+    var primaryActionMessage: String {
+        if expectedClasses == 0 {
+            return "Set semester dates or a timetable to project."
+        }
+        if willFallBelowTarget || riskLevel == .critical {
+            let need = max(1, recoveryNeeded)
+            return "Attend \(need) consecutive class\(need == 1 ? "" : "es")"
+        }
+        let bunks = bunkAllowedAfterProjection
+        if bunks > 0 {
+            return "You can safely bunk \(bunks) more class\(bunks == 1 ? "" : "es")"
+        }
+        return "Stay on the safe line — no bunk buffer left"
+    }
+}
+
+struct WeeklyAttendanceSummary: Equatable {
+    let attendedClasses: Int
+    let missedClasses: Int
+    let holidayDays: Int
+    let percentageDelta: Double
 }
 
 struct FacultyDashboardSummary: Equatable {

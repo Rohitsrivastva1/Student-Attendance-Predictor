@@ -36,7 +36,10 @@ enum AdMobConsentService {
         let parameters = makeRequestParameters()
 
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            ConsentInformation.shared.requestConsentInfoUpdate(with: parameters) { _ in
+            ConsentInformation.shared.requestConsentInfoUpdate(with: parameters) { error in
+                if let error {
+                    print("[UMP] Consent info update failed: \(error.localizedDescription)")
+                }
                 continuation.resume()
             }
         }
@@ -47,6 +50,7 @@ enum AdMobConsentService {
             print("[UMP] Consent form error: \(error.localizedDescription)")
             #endif
         }
+        AnalyticsService.shared.log(.umpConsentResult(canRequestAds: canRequestAds))
         #endif
     }
 
@@ -61,9 +65,10 @@ enum AdMobConsentService {
     private static func makeRequestParameters() -> RequestParameters {
         let parameters = RequestParameters()
         #if DEBUG
-        // Simulates EEA so the consent popup appears while developing (remove effect in Release).
+        // Treat the simulator/dev device as non-EEA so consent isn't required and test ads
+        // can serve immediately. Switch to `.EEA` temporarily to QA the GDPR consent form.
         let debugSettings = DebugSettings()
-        debugSettings.geography = .EEA
+        debugSettings.geography = .disabled
         parameters.debugSettings = debugSettings
         #endif
         return parameters
