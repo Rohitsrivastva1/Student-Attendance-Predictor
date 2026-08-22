@@ -75,11 +75,18 @@ final class AnalyticsService {
         static let activeWeekKey = "analytics.activeWeekKey"
         static let activeDaysInWeek = "analytics.activeDaysInWeek"
         static let lastLoggedWeeklyActiveDays = "analytics.lastLoggedWeeklyActiveDays"
+        static let lastProPaywallSource = "analytics.lastProPaywallSource"
     }
 
     private var sessionBannerImpressions = 0
     private var sessionInterstitialImpressions = 0
     private var sessionAppOpenImpressions = 0
+    private var sessionInterstitialInsights = 0
+    private var sessionInterstitialOverview = 0
+    private var sessionInterstitialSubjects = 0
+    private var sessionInterstitialOther = 0
+    private var sessionBannerClicks = 0
+    private var sessionInterstitialClicks = 0
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -127,6 +134,10 @@ final class AnalyticsService {
 
     // MARK: - Logging
 
+    /// Surfaces that already logged `pro_cta_shown` this process — avoids inflating
+    /// impression counts when Home/Insights redraw on every tab switch.
+    private var proCtaShownThisLaunch = Set<String>()
+
     func log(_ event: AnalyticsEvent) {
         let name = event.name
         let params = event.parameters
@@ -136,6 +147,25 @@ final class AnalyticsService {
             for (key, value) in params { merged[key] = value }
             for backend in self.backends {
                 backend.log(name: name, parameters: merged)
+            }
+        }
+    }
+
+    /// Logs `pro_cta_shown` at most once per surface per app launch.
+    func logProCtaShownOnce(surface: String) {
+        runOnMain { [weak self] in
+            guard let self else { return }
+            guard self.proCtaShownThisLaunch.insert(surface).inserted else { return }
+            self.log(.proCtaShown(surface: surface))
+        }
+    }
+
+    /// Firebase / GA4 standard purchase event so revenue appears in Analytics reports.
+    func logPurchase(value: Double, currency: String, productID: String) {
+        runOnMain { [weak self] in
+            guard let self else { return }
+            for backend in self.backends {
+                backend.logPurchase(value: value, currency: currency, productID: productID)
             }
         }
     }
@@ -155,12 +185,29 @@ final class AnalyticsService {
         }
     }
 
-    var daysSinceInstallBucket: String {
+    var daysSinceInstall: Int {
         guard let installDate = defaults.object(forKey: Keys.installDate) as? Date else {
-            return "unknown"
+            return 0
         }
-        let days = Calendar.current.dateComponents([.day], from: installDate, to: Date()).day ?? 0
-        switch days {
+        return Calendar.current.dateComponents([.day], from: installDate, to: Date()).day ?? 0
+    }
+
+    /// True after the user logs Mark Today at least once (`mark_today_first_use`).
+    var hasMarkedAtLeastOnce: Bool {
+        defaults.bool(forKey: Keys.didLogFirstMark)
+    }
+
+    /// Last paywall analytics source — used when StoreKit completes outside the paywall UI.
+    func setLastProPaywallSource(_ source: String) {
+        defaults.set(source, forKey: Keys.lastProPaywallSource)
+    }
+
+    var lastProPaywallSource: String {
+        defaults.string(forKey: Keys.lastProPaywallSource) ?? "storekit_update"
+    }
+
+    var daysSinceInstallBucket: String {
+        switch daysSinceInstall {
         case 0: return "0"
         case 1: return "1"
         case 2...7: return "2-7"
@@ -169,14 +216,32 @@ final class AnalyticsService {
         }
     }
 
-    func recordAdImpression(_ type: String) {
+    func recordAdImpression(_ type: String, placement: String? = nil) {
         runOnMain { [weak self] in
             guard let self else { return }
             switch type {
-            case "banner": self.sessionBannerImpressions += 1
-            case "interstitial": self.sessionInterstitialImpressions += 1
-            case "app_open": self.sessionAppOpenImpressions += 1
-            default: break
+            case "banner":
+                self.sessionBannerImpressions += 1
+            case "interstitial":
+                self.sessionInterstitialImpressions += 1
+                switch placement {
+                case AdMobConfiguration.Placement.afterInsightsOpened:
+                    self.sessionInterstitialInsights += 1
+                case AdMobConfiguration.Placement.afterOverviewOpened:
+                    self.sessionInterstitialOverview += 1
+                case AdMobConfiguration.Placement.afterSubjectsOpened:
+                    self.sessionInterstitialSubjects += 1
+                default:
+                    self.sessionInterstitialOther += 1
+                }
+            case "app_open":
+                self.sessionAppOpenImpressions += 1
+            case "banner_click":
+                self.sessionBannerClicks += 1
+            case "interstitial_click":
+                self.sessionInterstitialClicks += 1
+            default:
+                break
             }
         }
     }
@@ -184,6 +249,7 @@ final class AnalyticsService {
     func recordFirstMarkIfNeeded() {
         guard defaults.bool(forKey: Keys.didLogFirstMark) == false else { return }
         defaults.set(true, forKey: Keys.didLogFirstMark)
+        NotificationService.cancelDayTwoMarkNudge()
         log(.markTodayFirstUse)
     }
 
@@ -321,20 +387,26 @@ final class AnalyticsService {
         attributeOpenSource()
     }
 
-    /// Classifies how this app-open started: `notification` if a notification tap
-    /// landed within the attribution window, otherwise `organic`. The small delay
-    /// absorbs ordering differences between scene activation and the notification
-    /// delegate callback (which can fire slightly before or after).
+    /// Classifies how this app-open started. Prefers notification → deep link / UTM →
+    /// Apple Search Ads → organic. The small delay absorbs ordering differences between
+    /// scene activation and notification / URL callbacks.
     private func attributeOpenSource() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
             guard let self else { return }
-            let isFromNotification: Bool
-            if let openedAt = self.notificationOpenedAt {
-                isFromNotification = Date().timeIntervalSince(openedAt) <= self.notificationOpenWindow
-            } else {
-                isFromNotification = false
+            let attribution = AcquisitionAttribution.shared.resolveForSession(
+                notificationOpenedAt: self.notificationOpenedAt,
+                notificationWindow: self.notificationOpenWindow
+            )
+            self.log(.appOpenSource(
+                source: attribution.source,
+                campaign: attribution.campaign,
+                medium: attribution.medium,
+                detail: attribution.detail
+            ))
+            if let campaign = attribution.campaign {
+                self.setUserProperty(String(campaign.prefix(36)), forName: "acq_campaign")
             }
-            self.log(.appOpenSource(source: isFromNotification ? "notification" : "organic"))
+            self.setUserProperty(attribution.source, forName: "acq_source")
         }
     }
 
@@ -351,9 +423,28 @@ final class AnalyticsService {
                 appOpen: sessionAppOpenImpressions
             ))
         }
+        let interstitialPlacementTotal = sessionInterstitialInsights
+            + sessionInterstitialOverview
+            + sessionInterstitialSubjects
+            + sessionInterstitialOther
+        if interstitialPlacementTotal > 0 || sessionInterstitialClicks > 0 {
+            log(.sessionInterstitialByPlacement(
+                insights: sessionInterstitialInsights,
+                overview: sessionInterstitialOverview,
+                subjects: sessionInterstitialSubjects,
+                other: sessionInterstitialOther,
+                clicks: sessionInterstitialClicks
+            ))
+        }
         sessionBannerImpressions = 0
         sessionInterstitialImpressions = 0
         sessionAppOpenImpressions = 0
+        sessionInterstitialInsights = 0
+        sessionInterstitialOverview = 0
+        sessionInterstitialSubjects = 0
+        sessionInterstitialOther = 0
+        sessionBannerClicks = 0
+        sessionInterstitialClicks = 0
 
         defaults.set(Date(), forKey: Keys.lastSessionEnd)
         sessionStartedAt = nil

@@ -26,19 +26,21 @@ struct ContentView: View {
                     .foregroundStyle(.white.opacity(0.9))
             }
         }
-        .fullScreenCover(isPresented: $showOnboarding) {
+        .fullScreenCover(isPresented: $showOnboarding, onDismiss: {
+            // After intro (or paywall), allow a cold-start app-open if one is ready.
+            AdMobAppOpenService.shared.showAdIfAvailable()
+        }) {
             OnboardingView {
                 showOnboarding = false
             }
         }
         .onAppear {
             AppLaunchState.isMainContentReady = false
+            AttendanceViewModel.recordAppSession()
             AdMobAppOpenService.shared.recordLaunch()
             AdMobService.requestTrackingPermission()
             AdMobInterstitialService.shared.preload()
             AdMobAppOpenService.shared.preload()
-            // Rewarded preload once ads may be shown — improves 24h-remove / unlock CTR.
-            AdMobRewardedService.shared.preload()
         }
         .task(id: subjectStore == nil) {
             guard subjectStore == nil else { return }
@@ -49,14 +51,23 @@ struct ContentView: View {
             subjectStore = store
             AnalyticsService.shared.appBecameReady()
             AppLaunchState.isMainContentReady = true
+            FocusTimerService.shared.reconcileLiveActivityOnLaunchIfNeeded()
             AnalyticsUserProfile.sync(subjectStore: store)
             decideOnboarding(for: store)
-            // Cold-start app-open: content is up; try once if a preloaded ad is ready.
-            AdMobAppOpenService.shared.showAdIfAvailable()
+            // Cold-start app-open: wait until onboarding is dismissed so it doesn't cover the intro.
+            if UserDefaults.standard.bool(forKey: "onboarding.didComplete") {
+                AdMobAppOpenService.shared.showAdIfAvailable()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .attendanceDataChanged)) { _ in
+            subjectStore?.reloadFromExternalChange()
         }
     }
 
-    /// Returning users with real data skip the intro so updates don't interrupt habit.
+    /// Show intro for true first runs. Skip only if already completed, or the user
+    /// already has attendance data (update path / reinstall with iCloud backup rare).
+    /// Do NOT use `didMigrateToCoreDataV1` or launch-count — migration runs on every
+    /// fresh install and would hide onboarding forever.
     private func decideOnboarding(for store: SubjectStore) {
         let defaults = UserDefaults.standard
         let key = "onboarding.didComplete"
@@ -65,15 +76,17 @@ struct ContentView: View {
             return
         }
 
-        let isReturning = store.subjects.contains { $0.totalClasses > 0 }
-            || defaults.bool(forKey: "attendance.didMigrateToCoreDataV1")
-            || (defaults.object(forKey: "ads.appOpen.launchCount") as? Int ?? 0) > 1
-
-        if isReturning {
+        if store.subjects.contains(where: { $0.totalClasses > 0 }) {
             defaults.set(true, forKey: key)
             showOnboarding = false
-        } else {
+            AnalyticsService.shared.log(.onboardingSkipped(reason: "returning_data"))
+            return
+        }
+
+        // Defer one run-loop so fullScreenCover attaches after Home is in the hierarchy.
+        DispatchQueue.main.async {
             showOnboarding = true
+            AnalyticsService.shared.log(.onboardingShown)
         }
     }
 }

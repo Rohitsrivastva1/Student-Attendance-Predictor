@@ -3,7 +3,7 @@
 //  Student Attendance Predictor
 //
 //  App open ads when the user opens or returns to the app.
-//  Cold start: show once UI has settled (matched inventory should not be discarded).
+//  Cadence: show on opens 1, 2, 4, 5, 7, 8, … (skip every 3rd open).
 //
 
 import Foundation
@@ -27,16 +27,11 @@ final class AdMobAppOpenService: NSObject {
     /// Ads expire four hours after load (Google requirement).
     private let adExpirationInterval: TimeInterval = 4 * 3_600
 
-    #if DEBUG
-    private let minIntervalBetweenAds: TimeInterval = 60
-    private let minimumLaunchesBeforeShowing = 1
-    #else
-    private let minIntervalBetweenAds: TimeInterval = 60 * 60
-    private let minimumLaunchesBeforeShowing = 3
-    #endif
+    /// Cycle length: show, show, skip → opens 1+2 yes, 3 no, 4+5 yes, 6 no, …
+    private let openCadenceCycle = 3
 
+    private let openCountKey = "ads.appOpen.openCount"
     private let launchCountKey = "ads.appOpen.launchCount"
-    private let lastShownKey = "ads.appOpen.lastShown"
 
     private var isFirstActivationThisLaunch = true
     private var isLoadingAd = false
@@ -45,6 +40,10 @@ final class AdMobAppOpenService: NSObject {
     private var loadTime: Date?
     private var sdkReadyObserver: NSObjectProtocol?
     private var pendingShowTask: Task<Void, Never>?
+
+    /// One cadence decision per foreground activation (cold start or resume).
+    private var skippedCadenceThisActivation = false
+    private var allowedShowThisActivation = false
 
     #if canImport(GoogleMobileAds)
     private var appOpenAd: AppOpenAd?
@@ -74,6 +73,13 @@ final class AdMobAppOpenService: NSObject {
         Task { await loadAd() }
     }
 
+    /// Reset cadence so the next foreground counts as a new open.
+    func noteSceneDidEnterBackground() {
+        skippedCadenceThisActivation = false
+        allowedShowThisActivation = false
+        isFirstActivationThisLaunch = false
+    }
+
     /// Call when the scene becomes active (mirrors `applicationDidBecomeActive`).
     func showAdIfAvailable() {
         pendingShowTask?.cancel()
@@ -91,26 +97,29 @@ final class AdMobAppOpenService: NSObject {
                 logSkip("ads_removed_reward_active")
                 return
             }
-            guard hasMinimumLaunches() else {
-                logSkip("minimum_launches_not_met")
-                await loadAd()
-                return
-            }
             if isShowingAd || AdMobFullScreenGate.isOccupied {
                 logSkip("already_showing")
                 return
             }
 
-            let isColdStartActivation = isFirstActivationThisLaunch
-            isFirstActivationThisLaunch = false
-
-            // Cold start used to skip once main UI was ready (almost always), which
-            // burned matched app-open inventory. Allow one show after UI settles.
-            if isColdStartActivation == false, canShowUnderFrequencyCap() == false {
-                logSkip("frequency_cap")
-                await loadAd()
+            // Decide once per activation: show on 1st+2nd of each cycle; skip every 3rd.
+            // Duplicate scenePhase / SDK-ready triggers must not log another skip.
+            if skippedCadenceThisActivation {
                 return
             }
+            if allowedShowThisActivation == false {
+                let openNumber = recordOpenAndReturnCount()
+                if shouldShow(forOpenNumber: openNumber) == false {
+                    skippedCadenceThisActivation = true
+                    logSkip("open_cadence")
+                    await loadAd()
+                    return
+                }
+                allowedShowThisActivation = true
+            }
+
+            let isColdStartActivation = isFirstActivationThisLaunch
+            isFirstActivationThisLaunch = false
 
             guard await AdMobService.ensureReadyForAds() else {
                 logSkip("consent_or_sdk_not_ready")
@@ -211,33 +220,29 @@ final class AdMobAppOpenService: NSObject {
     private func recordSuccessfulImpression() {
         guard didRecordImpression == false else { return }
         didRecordImpression = true
-        recordShown()
         AnalyticsService.shared.log(.appOpenAdShown)
         AnalyticsService.shared.recordAdImpression("app_open")
     }
     #endif
 
-    private func hasMinimumLaunches() -> Bool {
-        let defaults = UserDefaults.standard
-        let count = defaults.integer(forKey: launchCountKey)
-        return count >= minimumLaunchesBeforeShowing
+    private func shouldShow(forOpenNumber openNumber: Int) -> Bool {
+        guard openNumber > 0 else { return false }
+        // 1,2 yes · 3 no · 4,5 yes · 6 no …
+        return openNumber % openCadenceCycle != 0
     }
 
-    /// Increment once per process launch (called from ContentView).
+    @discardableResult
+    private func recordOpenAndReturnCount() -> Int {
+        let defaults = UserDefaults.standard
+        let next = defaults.integer(forKey: openCountKey) + 1
+        defaults.set(next, forKey: openCountKey)
+        return next
+    }
+
+    /// Increment once per process launch (called from ContentView). Kept for analytics continuity.
     func recordLaunch() {
         let defaults = UserDefaults.standard
         defaults.set(defaults.integer(forKey: launchCountKey) + 1, forKey: launchCountKey)
-    }
-
-    private func canShowUnderFrequencyCap() -> Bool {
-        guard let lastShown = UserDefaults.standard.object(forKey: lastShownKey) as? Date else {
-            return true
-        }
-        return Date().timeIntervalSince(lastShown) >= minIntervalBetweenAds
-    }
-
-    private func recordShown() {
-        UserDefaults.standard.set(Date(), forKey: lastShownKey)
     }
 
     private func logSkip(_ reason: String) {

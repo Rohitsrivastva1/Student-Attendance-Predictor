@@ -86,20 +86,20 @@ enum StudentMarket: String, CaseIterable, Identifiable {
     var homeMarketTip: String? {
         switch self {
         case .unitedStates:
-            return "US mode: open Grades for GPA + exam deadlines. Attendance still lives on Home."
+            return "US mode: open Tools for GPA + exam deadlines. Attendance still lives on Home."
         case .unitedKingdom:
-            return "UK mode: open Grades for modules + deadlines. Attendance still lives on Home."
+            return "UK mode: open Tools for marks + deadlines. Attendance still lives on Home."
         case .other:
-            return "Open Grades for GPA + deadlines. Attendance still lives on Home."
+            return "Open Tools for GPA + deadlines. Attendance still lives on Home."
         case .india:
-            return nil
+            return "Open Tools for CGPA (10-point) + exam deadlines."
         }
     }
 
     var academicsHeadline: String {
         switch self {
         case .india:
-            return "Academics"
+            return "CGPA & Deadlines"
         case .unitedStates:
             return "Grades & Deadlines"
         case .unitedKingdom:
@@ -109,14 +109,44 @@ enum StudentMarket: String, CaseIterable, Identifiable {
         }
     }
 
+    var academicsSubtitle: String {
+        switch self {
+        case .india:
+            return "10-point CGPA, exams, and deadlines — built for Indian universities."
+        case .unitedStates:
+            return "4.0 GPA, exams, and deadlines for US courses."
+        case .unitedKingdom:
+            return "Module marks, classification, and deadlines for UK degrees."
+        case .other:
+            return "GPA, exams, and deadlines for your courses."
+        }
+    }
+
     var gpaScaleLabel: String {
         switch self {
         case .unitedKingdom:
-            return "UK % / classification helper"
+            return "UK % / classification"
         case .unitedStates, .other:
             return "US 4.0 GPA"
         case .india:
-            return "GPA (4.0 scale)"
+            return "India CGPA (10-point)"
+        }
+    }
+
+    var academicsTabTitle: String {
+        switch self {
+        case .unitedKingdom: return "Modules"
+        case .india: return "Academics"
+        case .unitedStates, .other: return "Grades"
+        }
+    }
+
+    /// Default credits when adding a course/module/subject.
+    var defaultCredits: Double {
+        switch self {
+        case .unitedKingdom: return 20
+        case .india: return 4
+        case .unitedStates, .other: return 3
         }
     }
 

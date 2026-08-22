@@ -26,11 +26,17 @@ final class ProPurchaseService: ObservableObject {
 
     @Published private(set) var phase: PurchasePhase = .idle
     @Published private(set) var displayPrice: String?
+    /// Numeric price for Firebase purchase revenue (nil until product loads).
+    @Published private(set) var priceValue: Double?
+    /// ISO currency code for Firebase purchase revenue (e.g. "INR").
+    @Published private(set) var currencyCode: String?
     @Published private(set) var isAvailable = false
 
 #if canImport(StoreKit)
     private var product: Product?
     private var updatesTask: Task<Void, Never>?
+    private let loggedPurchaseIDsKey = "iap.loggedPurchaseTransactionIDs"
+    private var purchaseFlowActive = false
 #endif
 
     private init() {}
@@ -48,24 +54,44 @@ final class ProPurchaseService: ObservableObject {
 #endif
     }
 
-    func loadProduct() async {
+    /// Loads the Pro product. Pass `surfaceFailure: true` from the paywall / purchase
+    /// path so missing products show an error; launch-time loads stay silent.
+    func loadProduct(surfaceFailure: Bool = false) async {
 #if canImport(StoreKit)
-        phase = displayPrice == nil ? .loading : phase
+        if displayPrice == nil {
+            phase = .loading
+        }
         do {
             let products = try await Product.products(for: [ProPurchaseConfiguration.proProductID])
             product = products.first
             displayPrice = product?.displayPrice
+            if let product {
+                priceValue = NSDecimalNumber(decimal: product.price).doubleValue
+                currencyCode = product.priceFormatStyle.currencyCode
+            } else {
+                priceValue = nil
+                currencyCode = nil
+            }
             isAvailable = product != nil
-            if case .loading = phase { phase = .idle }
             if product == nil {
-                phase = .failed("Pro is unavailable right now. Please try again later.")
+                phase = surfaceFailure
+                    ? .failed("Pro is unavailable right now. Please try again later.")
+                    : .idle
+            } else if case .loading = phase {
+                phase = .idle
+            } else if case .failed = phase {
+                phase = .idle
             }
         } catch {
             isAvailable = false
-            phase = .failed(friendlyMessage(for: error))
+            phase = surfaceFailure
+                ? .failed(friendlyMessage(for: error))
+                : .idle
         }
 #else
-        phase = .failed("In-app purchases are not available on this platform.")
+        if surfaceFailure {
+            phase = .failed("In-app purchases are not available on this platform.")
+        }
 #endif
     }
 
@@ -73,7 +99,7 @@ final class ProPurchaseService: ObservableObject {
     func purchase() async -> Bool {
 #if canImport(StoreKit)
         if product == nil {
-            await loadProduct()
+            await loadProduct(surfaceFailure: true)
         }
         guard let product else {
             phase = .failed("Couldn't load Pro. Check your connection and try again.")
@@ -81,24 +107,30 @@ final class ProPurchaseService: ObservableObject {
         }
 
         phase = .purchasing
+        purchaseFlowActive = true
         do {
             let result = try await product.purchase()
             switch result {
             case .success(let verification):
                 let ok = await finish(verification)
+                purchaseFlowActive = false
                 phase = ok ? .success : .failed("Purchase couldn't be verified. Please try Restore Purchases.")
                 return ok
             case .userCancelled:
+                purchaseFlowActive = false
                 phase = .idle
                 return false
             case .pending:
+                purchaseFlowActive = false
                 phase = .failed("Purchase is pending approval. You'll get Pro once it's approved.")
                 return false
             @unknown default:
-                phase = .idle
+                purchaseFlowActive = false
+                phase = .failed("Purchase didn't complete. Please try again.")
                 return false
             }
         } catch {
+            purchaseFlowActive = false
             phase = .failed(friendlyMessage(for: error))
             return false
         }
@@ -172,8 +204,45 @@ final class ProPurchaseService: ObservableObject {
         }
         let unlocked = transaction.revocationDate == nil
         AdEntitlementsStore.shared.setProUnlocked(unlocked)
+        if unlocked {
+            logPurchaseAnalyticsIfNeeded(for: transaction)
+        }
         await transaction.finish()
         return unlocked
+    }
+
+    /// Central purchase analytics — covers paywall `buy()` and background `Transaction.updates`.
+    private func logPurchaseAnalyticsIfNeeded(for transaction: Transaction) {
+        let isNewPurchase = transaction.reason == .purchase || purchaseFlowActive
+        guard isNewPurchase else { return }
+
+        let transactionID = String(transaction.id)
+        var logged = Set(UserDefaults.standard.stringArray(forKey: loggedPurchaseIDsKey) ?? [])
+        guard logged.insert(transactionID).inserted else { return }
+        if logged.count > 100 {
+            logged = Set(logged.suffix(100))
+        }
+        UserDefaults.standard.set(Array(logged), forKey: loggedPurchaseIDsKey)
+
+        let source = AnalyticsService.shared.lastProPaywallSource
+        AnalyticsService.shared.log(.proPurchaseSucceeded(source: source))
+
+        let value = NSDecimalNumber(decimal: transaction.price ?? 0).doubleValue
+        let currency = transaction.currency?.identifier ?? currencyCode ?? "INR"
+        if value > 0 {
+            AnalyticsService.shared.logPurchase(
+                value: value,
+                currency: currency,
+                productID: ProPurchaseConfiguration.proProductID
+            )
+        } else if let priceValue, let currencyCode {
+            AnalyticsService.shared.logPurchase(
+                value: priceValue,
+                currency: currencyCode,
+                productID: ProPurchaseConfiguration.proProductID
+            )
+        }
+        AnalyticsUserProfile.sync(subjectStore: nil)
     }
 #endif
 

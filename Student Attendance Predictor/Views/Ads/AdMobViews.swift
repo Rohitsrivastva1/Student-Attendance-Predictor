@@ -140,8 +140,8 @@ enum AdMobService {
 
 // MARK: - Anchored adaptive banner
 
-/// Drop-in inline ad slot. Collapses until filled. Loads only after the slot stays
-/// active ~1.5s (skips quick tab flips). All placements share one ad unit.
+/// Drop-in banner slot. Collapses until filled. Loads only after the slot stays
+/// active ~1.5s (skips quick tab flips). All placements share the Home unit.
 struct AdMobBannerCard: View {
     let placement: String
     /// When false, the host pauses the banner and does not issue new requests.
@@ -188,7 +188,8 @@ private struct AdMobBannerHost: UIViewControllerRepresentable {
     @Binding var adHeight: CGFloat
 
     func makeUIViewController(context: Context) -> AdMobBannerHostViewController {
-        let controller = AdMobBannerHostViewController(placement: placement)
+        // Pass real isActive up front — defaulting to true caused inactive tabs to request.
+        let controller = AdMobBannerHostViewController(placement: placement, isActive: isActive)
         controller.onLoadStateChanged = { loaded, height in
             Task { @MainActor in
                 adHeight = height
@@ -203,29 +204,41 @@ private struct AdMobBannerHost: UIViewControllerRepresentable {
     }
 }
 
-/// Loads an inline adaptive banner only after a short dwell on an active tab.
-/// One failure retry. Tracks `banner_visible_seconds` while filled + active.
+/// Loads an anchored adaptive banner after a short dwell on an active tab.
+/// One quick retry, then a slow recover loop while the slot stays visible.
+/// Tracks `banner_visible_seconds` while filled + active.
 private final class AdMobBannerHostViewController: UIViewController, BannerViewDelegate {
     private let placement: String
     private var bannerView: BannerView?
     private var hasRequested = false
     private var isLoading = false
-    private var isActive = true
+    private var isActive: Bool
     private var hasFilledAd = false
+    /// True after a consent/SDK block — stop layout retries until SDK becomes ready.
+    private var isWaitingForSDKReady = false
+    private var didLogConsentSkip = false
     private var loadedWidth: CGFloat = 0
     private var retryCount = 0
-    private let maxRetries = 1
+    private var isCurrentLoadARetry = false
+    private let maxQuickRetries = 1
     /// Ignore flick-through tab switches before spending a network request.
     private let dwellBeforeRequestNanoseconds: UInt64 = 1_500_000_000
+    /// Backoff when inventory returns no-fill (GAD error code 3).
+    private let noFillRetryNanoseconds: UInt64 = 30_000_000_000
+    private let defaultRetryNanoseconds: UInt64 = 5_000_000_000
+    /// After quick retries are exhausted, keep trying while visible (AdMob-safe pace).
+    private let recoverRetryNanoseconds: UInt64 = 60_000_000_000
     private var dwellTask: Task<Void, Never>?
+    private var recoverTask: Task<Void, Never>?
     var onLoadStateChanged: ((Bool, CGFloat) -> Void)?
     private var sdkReadyObserver: NSObjectProtocol?
 
     private var visibilityStartedAt: Date?
     private var accumulatedVisibleSeconds = 0
 
-    init(placement: String) {
+    init(placement: String, isActive: Bool) {
         self.placement = placement
+        self.isActive = isActive
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -241,12 +254,19 @@ private final class AdMobBannerHostViewController: UIViewController, BannerViewD
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.scheduleLoadAfterDwell()
+            guard let self else { return }
+            self.isWaitingForSDKReady = false
+            self.didLogConsentSkip = false
+            self.scheduleLoadAfterDwell()
+        }
+        if isActive {
+            scheduleLoadAfterDwell()
         }
     }
 
     deinit {
         dwellTask?.cancel()
+        recoverTask?.cancel()
         if let start = visibilityStartedAt {
             accumulatedVisibleSeconds += max(0, Int(Date().timeIntervalSince(start)))
             visibilityStartedAt = nil
@@ -271,10 +291,15 @@ private final class AdMobBannerHostViewController: UIViewController, BannerViewD
             if hasFilledAd {
                 bannerView?.delegate = self
                 beginVisibilityTracking()
+            } else if hasRequested, bannerView != nil {
+                // Slot became visible again with an empty banner — recover.
+                scheduleRecoverReload()
             }
         } else {
             dwellTask?.cancel()
             dwellTask = nil
+            recoverTask?.cancel()
+            recoverTask = nil
             // Keep a filled banner for when the user returns — do not reload.
             bannerView?.delegate = nil
             endVisibilityTrackingAndFlush()
@@ -299,12 +324,14 @@ private final class AdMobBannerHostViewController: UIViewController, BannerViewD
 
     private func scheduleLoadAfterDwell() {
         guard isActive else { return }
+        guard isWaitingForSDKReady == false else { return }
         guard hasRequested == false, isLoading == false, hasFilledAd == false else { return }
         dwellTask?.cancel()
         dwellTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: self?.dwellBeforeRequestNanoseconds ?? 1_500_000_000)
             guard let self, Task.isCancelled == false else { return }
             guard self.isActive, self.hasRequested == false, self.hasFilledAd == false else { return }
+            guard self.isWaitingForSDKReady == false else { return }
             let width = self.availableWidth()
             guard width > 0 else { return }
             await self.loadBanner(width: width)
@@ -316,6 +343,10 @@ private final class AdMobBannerHostViewController: UIViewController, BannerViewD
         guard isActive else { return }
         let width = availableWidth()
         guard width > 0 else { return }
+
+        if isWaitingForSDKReady {
+            return
+        }
 
         if hasRequested == false, isLoading == false, hasFilledAd == false {
             scheduleLoadAfterDwell()
@@ -335,11 +366,10 @@ private final class AdMobBannerHostViewController: UIViewController, BannerViewD
         return 0
     }
 
-    private let maxBannerHeight: CGFloat = 100
-
+    /// Anchored adaptive — typically stronger fill than capped inline for content slots.
     private func adaptiveSize(for width: CGFloat) -> AdSize {
-        let size = inlineAdaptiveBanner(width: width, maxHeight: maxBannerHeight)
-        return (size.size.width > 0 && size.size.height > 0) ? size : AdSizeLargeBanner
+        let size = currentOrientationAnchoredAdaptiveBanner(width: width)
+        return (size.size.width > 0 && size.size.height > 0) ? size : AdSizeBanner
     }
 
     @MainActor
@@ -349,13 +379,19 @@ private final class AdMobBannerHostViewController: UIViewController, BannerViewD
         defer { isLoading = false }
 
         guard await AdMobService.ensureReadyForAds() else {
-            AnalyticsService.shared.log(.bannerAdFailed(placement: placement, reason: "consent_or_sdk_not_ready"))
+            isWaitingForSDKReady = true
+            if didLogConsentSkip == false {
+                didLogConsentSkip = true
+                AnalyticsService.shared.log(
+                    .bannerAdSkipped(placement: placement, reason: "consent_or_sdk_not_ready")
+                )
+            }
             #if DEBUG
-            print("[AdMob] Banner (\(placement)) blocked: consent not available (canRequestAds == false).")
+            print("[AdMob] Banner (\(placement)) waiting: consent/SDK not ready.")
             #endif
-            // Allow another dwell attempt once SDK/consent becomes ready.
             return
         }
+        isWaitingForSDKReady = false
         guard isActive, hasRequested == false else { return }
         hasRequested = true
         loadedWidth = width
@@ -371,7 +407,8 @@ private final class AdMobBannerHostViewController: UIViewController, BannerViewD
             banner.centerXAnchor.constraint(equalTo: view.centerXAnchor),
         ])
         bannerView = banner
-        AnalyticsService.shared.log(.bannerAdRequested(placement: placement))
+        isCurrentLoadARetry = false
+        AnalyticsService.shared.log(.bannerAdRequested(placement: placement, isRetry: false))
         banner.load(AdMobService.makeAdRequest())
     }
 
@@ -380,6 +417,8 @@ private final class AdMobBannerHostViewController: UIViewController, BannerViewD
     func bannerViewDidReceiveAd(_ bannerView: BannerView) {
         retryCount = 0
         hasFilledAd = true
+        recoverTask?.cancel()
+        recoverTask = nil
         bannerView.delegate = self
         onLoadStateChanged?(true, bannerView.adSize.size.height)
         AnalyticsService.shared.log(.bannerAdLoaded(placement: placement))
@@ -397,23 +436,67 @@ private final class AdMobBannerHostViewController: UIViewController, BannerViewD
         beginVisibilityTracking()
     }
 
+    func bannerViewDidRecordClick(_ bannerView: BannerView) {
+        AnalyticsService.shared.log(.bannerAdClicked(placement: placement))
+        AnalyticsService.shared.recordAdImpression("banner_click")
+    }
+
     func bannerView(_ bannerView: BannerView, didFailToReceiveAdWithError error: Error) {
         hasFilledAd = false
         endVisibilityTrackingAndFlush()
         onLoadStateChanged?(false, 0)
         let reason = AdMobService.analyticsReason(for: error)
-        AnalyticsService.shared.log(.bannerAdFailed(placement: placement, reason: reason))
+        AnalyticsService.shared.log(
+            .bannerAdFailed(placement: placement, reason: reason, isRetry: isCurrentLoadARetry)
+        )
         #if DEBUG
         print("[AdMob] Banner (\(placement)) failed: \(reason) — \(error.localizedDescription)")
         #endif
-        guard isActive, retryCount < maxRetries else { return }
-        retryCount += 1
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
-            guard self.isActive else { return }
-            AnalyticsService.shared.log(.bannerAdRequested(placement: self.placement))
+        guard isActive else { return }
+
+        if retryCount < maxQuickRetries {
+            retryCount += 1
+            let delay = Self.isNoFill(reason: reason, error: error)
+                ? noFillRetryNanoseconds
+                : defaultRetryNanoseconds
+            scheduleBannerReload(on: bannerView, afterNanoseconds: delay)
+            return
+        }
+
+        // Stay alive: retry every 60s while the tab is visible (no-fill is often transient).
+        scheduleRecoverReload()
+    }
+
+    private func scheduleBannerReload(on bannerView: BannerView, afterNanoseconds: UInt64) {
+        dwellTask?.cancel()
+        dwellTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: afterNanoseconds)
+            guard let self, Task.isCancelled == false else { return }
+            guard self.isActive, self.hasFilledAd == false else { return }
+            self.isCurrentLoadARetry = true
+            AnalyticsService.shared.log(.bannerAdRequested(placement: self.placement, isRetry: true))
             bannerView.load(AdMobService.makeAdRequest())
         }
+    }
+
+    private func scheduleRecoverReload() {
+        guard isActive, hasFilledAd == false, bannerView != nil else { return }
+        recoverTask?.cancel()
+        recoverTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: self?.recoverRetryNanoseconds ?? 60_000_000_000)
+            guard let self, Task.isCancelled == false else { return }
+            guard self.isActive, self.hasFilledAd == false, let banner = self.bannerView else { return }
+            self.retryCount = 0
+            self.isCurrentLoadARetry = true
+            AnalyticsService.shared.log(.bannerAdRequested(placement: self.placement, isRetry: true))
+            banner.load(AdMobService.makeAdRequest())
+        }
+    }
+
+    private static func isNoFill(reason: String, error: Error) -> Bool {
+        if reason == "no_fill" || reason == "gad_3" { return true }
+        let text = error.localizedDescription.lowercased()
+        return text.contains("no fill") || text.contains("no ad to show")
     }
 }
 #endif

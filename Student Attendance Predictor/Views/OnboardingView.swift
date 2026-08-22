@@ -2,7 +2,8 @@
 //  OnboardingView.swift
 //  Student Attendance Predictor
 //
-//  Lightweight 3-screen intro — skippable, under ~10 seconds.
+//  Lightweight 4-screen intro — skippable, under ~15 seconds.
+//  Pro is offered later at high-intent moments, not before first value.
 //
 
 import SwiftUI
@@ -12,26 +13,55 @@ struct OnboardingView: View {
 
     @State private var page = 0
 
-    private let pages: [(icon: String, title: String, body: String, accent: Color)] = [
-        (
-            "shield.checkerboard",
-            "Know before you bunk",
-            "See exactly how many classes you can safely miss.",
-            Color(red: 0.32, green: 0.84, blue: 1.0)
-        ),
-        (
-            "hand.tap.fill",
-            "Track in seconds",
-            "Log today's attendance with one tap.",
-            Color(red: 0.2, green: 0.9, blue: 0.5)
-        ),
-        (
-            "bell.badge.fill",
-            "Stay above your target",
-            "Get alerts before your attendance becomes risky.",
-            Color(red: 1.0, green: 0.78, blue: 0.28)
-        )
-    ]
+    private var market: StudentMarket { StudentMarketStore.current }
+
+    private var pages: [(icon: String, title: String, body: String, accent: Color)] {
+        [
+            (
+                "shield.checkerboard",
+                market == .india ? "Know before you bunk" : "Know before you skip",
+                "See exactly how many classes you can safely miss.",
+                Color(red: 0.32, green: 0.84, blue: 1.0)
+            ),
+            (
+                "hand.tap.fill",
+                "Track in seconds",
+                "Log today's attendance with one tap.",
+                Color(red: 0.2, green: 0.9, blue: 0.5)
+            ),
+            (
+                "square.grid.2x2.fill",
+                toolsOnboardingTitle,
+                toolsOnboardingBody,
+                Color(red: 0.72, green: 0.55, blue: 1.0)
+            ),
+            (
+                "bell.badge.fill",
+                "Stay above your target",
+                "Get alerts before your attendance becomes risky.",
+                Color(red: 1.0, green: 0.78, blue: 0.28)
+            )
+        ]
+    }
+
+    private var toolsOnboardingTitle: String {
+        switch market {
+        case .india: return "Tools: CGPA & focus"
+        case .unitedKingdom: return "Tools: marks & focus"
+        case .unitedStates, .other: return "Tools: GPA & focus"
+        }
+    }
+
+    private var toolsOnboardingBody: String {
+        switch market {
+        case .india:
+            return "Open Tools for Focus Timer, 10-point CGPA, and exam reminders."
+        case .unitedKingdom:
+            return "Open Tools for Focus Timer, module marks, and exam reminders."
+        case .unitedStates, .other:
+            return "Open Tools for Focus Timer, 4.0 GPA, and exam reminders."
+        }
+    }
 
     var body: some View {
         ZStack {
@@ -50,7 +80,7 @@ struct OnboardingView: View {
                 HStack {
                     Spacer()
                     Button("Skip") {
-                        finish()
+                        finishIntro(via: "skip")
                     }
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.55))
@@ -84,7 +114,7 @@ struct OnboardingView: View {
                             page += 1
                         }
                     } else {
-                        finish()
+                        finishIntro(via: "get_started")
                     }
                 } label: {
                     Text(page < pages.count - 1 ? "Next" : "Get Started")
@@ -137,9 +167,11 @@ struct OnboardingView: View {
         }
     }
 
-    private func finish() {
+    /// Completes intro analytics, then enters the app. Pro is offered later
+    /// at high-intent moments (forecast lock, at-risk, streak) — not before value.
+    private func finishIntro(via: String) {
         UserDefaults.standard.set(true, forKey: "onboarding.didComplete")
-        AnalyticsService.shared.log(.onboardingCompleted)
+        AnalyticsService.shared.log(.onboardingCompleted(via: via))
         onFinished()
     }
 }

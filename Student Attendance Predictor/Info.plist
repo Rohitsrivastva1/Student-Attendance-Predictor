@@ -4,6 +4,8 @@
 <dict>
 	<key>NSUserTrackingUsageDescription</key>
 	<string>This identifier helps Bunk Planner show more relevant ads and keep the app free. If you choose not to allow tracking, the app still works and ads may be less personalized.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>GADApplicationIdentifier</key>
 	<string>ca-app-pub-6782814088719675~7481844312</string>
 	<key>SKAdNetworkItems</key>

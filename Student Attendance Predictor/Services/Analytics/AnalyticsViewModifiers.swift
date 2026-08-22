@@ -23,6 +23,7 @@ extension View {
                 AnalyticsService.shared.handleForeground()
                 AdMobAppOpenService.shared.showAdIfAvailable()
             case .background:
+                AdMobAppOpenService.shared.noteSceneDidEnterBackground()
                 AnalyticsService.shared.handleBackground()
             default:
                 break

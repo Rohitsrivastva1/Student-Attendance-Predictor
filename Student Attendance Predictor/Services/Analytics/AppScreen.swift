@@ -15,7 +15,12 @@ enum AppScreen: String, CaseIterable {
     case insights
     case log
     case overview
+    case tools
     case academics
+    case focusTimer = "focus_timer"
+    case skipPlannerTool = "skip_planner_tool"
+    case semesterForecastTool = "semester_forecast_tool"
+    case exportReportsTool = "export_reports_tool"
     case settings
     case subjects
     case timetableEditor = "timetable_editor"

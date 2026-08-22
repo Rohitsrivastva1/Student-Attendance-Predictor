@@ -15,10 +15,14 @@ enum AdMobConfiguration {
         /// Mapped to a dedicated unit configured for third-party mediation.
         static let insights = "insights-trend-forecast"
         static let overview = "overview-dashboard-subjects"
-        /// Natural break after the user marks attendance (interstitial).
+        /// Natural break after the user marks attendance (interstitial) — deprecated / unused.
         static let afterDayMarked = "after_day_marked"
         /// Natural break on first Insights visit in a session (interstitial).
         static let afterInsightsOpened = "after_insights_opened"
+        /// Natural break on first Overview visit in a session (interstitial).
+        static let afterOverviewOpened = "after_overview_opened"
+        /// Natural break on first Subjects screen open in a session (interstitial).
+        static let afterSubjectsOpened = "after_subjects_opened"
     }
 
     /// Default anchored adaptive banner (production) — Home slot.
@@ -31,7 +35,7 @@ enum AdMobConfiguration {
     /// Overview banner (production).
     static let overviewBannerAdUnitID = "ca-app-pub-6782814088719675/9493185513"
 
-    /// Rewarded ad (production) — powers "remove ads for 24h" and unlocking the forecast.
+    /// Rewarded ad (production) — powers short-lived ad removal and forecast unlock.
     static let rewardedAdUnitID = "ca-app-pub-6782814088719675/9859604331"
 
     /// Interstitial ad (production) — shown after marking attendance (frequency-capped).
@@ -60,8 +64,9 @@ enum AdMobConfiguration {
     #endif
 
     /// Resolves the banner ad unit for a given placement.
-    /// All slots share the Home unit to concentrate demand and raise show rate
-    /// at ~100–150 DAU (separate units were splitting thin India inventory).
+    /// All slots share the Home unit so thin India demand is not split across
+    /// multiple units (Insights mediation was starving fill at ~16% load rate).
+    /// `insightsBannerAdUnitID` / `overviewBannerAdUnitID` kept for console remapping later.
     static func resolvedBannerAdUnitID(for placement: String) -> String {
         _ = placement
         return resolvedBannerAdUnitID

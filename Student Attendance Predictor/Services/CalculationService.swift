@@ -76,6 +76,24 @@ enum CalculationService {
         return max(0, scheduled - max(holidayClassCount, 0))
     }
 
+    /// Remaining semester classes after holidays and planned bunks
+    /// (timetable × weeks − holidays − bunks).
+    static func classesLeftThisSemester(
+        schedule: WeeklySchedule,
+        weeks: Int,
+        holidayClassCount: Int,
+        plannedBunks: Int,
+        fallbackClassesPerWeek: Int = 0
+    ) -> Int {
+        let projected = projectedTotalClasses(
+            schedule: schedule,
+            weeks: weeks,
+            holidayClassCount: holidayClassCount,
+            fallbackClassesPerWeek: fallbackClassesPerWeek
+        )
+        return max(0, projected - max(plannedBunks, 0))
+    }
+
     static func riskLevel(
         attended: Int,
         total: Int,

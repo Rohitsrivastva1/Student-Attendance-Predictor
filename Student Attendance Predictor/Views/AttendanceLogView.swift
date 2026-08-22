@@ -7,88 +7,113 @@ import SwiftUI
 
 // MARK: - Mark Today card (Home tab)
 
-/// Daily habit center for the active subject. One-tap Yes / Missed / Holiday,
-/// with a short celebration when a mark is saved.
+/// Daily habit center — marks all subjects scheduled today in one flow
+/// (falls back to every subject when the timetable has nothing for today).
+/// One subject card at a time; swipe left/right between subjects. “Mark all Yes”
+/// stays available so bulk days don’t require N swipes.
 struct MarkTodayCard: View {
     @ObservedObject var subjectStore: SubjectStore
     var onCelebrated: (() -> Void)? = nil
+    var onAddSubject: (() -> Void)? = nil
 
-    @State private var manualScheduled = 1
-    @State private var partialAttended = 0
-    @State private var isLoggingAnyway = false
     @State private var showCelebration = false
     @State private var celebratePulse = false
+    @State private var selectedSubjectID: UUID = UUID()
+    @State private var didDiscoverPaging = false
+    @State private var nudgeChevron = false
 
     private let today = Date()
+    private let didDiscoverPagingKey = "markToday.didDiscoverPaging"
 
-    private enum DayChoice { case attended, missed, holiday }
+    fileprivate enum DayChoice { case attended, missed, holiday }
 
     private let attendedTint = Color(red: 0.2, green: 0.9, blue: 0.5)
     private let missedTint = Color.red
     private let accentTint = Color(red: 0.32, green: 0.84, blue: 1.0)
 
-    private var subjectID: UUID? { subjectStore.selectedSubjectID }
-
-    private var scheduledByTimetable: Int {
-        guard let id = subjectID else { return 0 }
-        return subjectStore.classesScheduledToday(for: id, on: today)
-    }
-
-    private var existingEntry: AttendanceLogEntry? {
-        guard let id = subjectID else { return nil }
-        return subjectStore.logEntry(subjectID: id, date: today)
-    }
-
-    private var effectiveScheduled: Int {
-        scheduledByTimetable > 0 ? scheduledByTimetable : max(1, manualScheduled)
-    }
-
-    private var isDefaultHolidayToday: Bool {
-        AttendanceCalendar.isWeeklyHoliday(today) && scheduledByTimetable == 0
-    }
-
-    private var subjectHasTimetable: Bool {
-        guard
-            let id = subjectID,
-            let subject = subjectStore.subjects.first(where: { $0.id == id })
-        else {
-            return false
+    private var subjectsToday: [SubjectSummary] {
+        // Unmarked first so paging starts on what still needs a tap.
+        subjectStore.subjectsForMarkToday(on: today).sorted { lhs, rhs in
+            let leftMarked = subjectStore.logEntry(subjectID: lhs.id, date: today) != nil
+            let rightMarked = subjectStore.logEntry(subjectID: rhs.id, date: today) != nil
+            if leftMarked != rightMarked { return leftMarked == false }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
         }
-        return subject.weeklySchedule.totalPerWeek > 0
     }
 
-    private var useDirectLogging: Bool {
-        subjectHasTimetable == false && isDefaultHolidayToday == false
+    private var usingTimetableFilter: Bool {
+        subjectStore.subjects.contains { subjectStore.classesScheduledToday(for: $0.id, on: today) > 0 }
     }
 
-    private var hasLoggedClass: Bool {
-        guard let entry = existingEntry else { return false }
-        return entry.isHoliday == false && entry.scheduledClasses > 0
+    private var markedCount: Int {
+        subjectsToday.reduce(0) { count, subject in
+            subjectStore.logEntry(subjectID: subject.id, date: today) == nil ? count : count + 1
+        }
     }
 
-    private var currentChoice: DayChoice? {
-        guard let entry = existingEntry else { return nil }
-        if entry.isHoliday { return .holiday }
-        if entry.scheduledClasses <= 0 { return nil }
-        return entry.attendedClasses <= 0 ? .missed : .attended
+    private var unmarkedSubjects: [SubjectSummary] {
+        subjectsToday.filter { subjectStore.logEntry(subjectID: $0.id, date: today) == nil }
     }
 
-    private var reloadKey: String {
-        let entry = existingEntry
-        return [
-            subjectID?.uuidString ?? "none",
-            String(scheduledByTimetable),
-            String(entry?.attendedClasses ?? -1),
-            String(entry?.scheduledClasses ?? -1),
-            String(entry?.isHoliday ?? false)
-        ].joined(separator: "-")
+    private var currentPageIndex: Int {
+        subjectsToday.firstIndex(where: { $0.id == selectedSubjectID }) ?? 0
+    }
+
+    private var promptCopy: (title: String, subtitle: String) {
+        let hour = Calendar.current.component(.hour, from: today)
+        let count = subjectsToday.count
+        let subjectWord = count == 1 ? "subject" : "subjects"
+        if hour < 12 {
+            return (
+                "Morning check-in",
+                count == 0
+                    ? "Add a subject to start logging."
+                    : count == 1
+                        ? "Mark today’s class — one tap."
+                        : "Swipe subjects · mark each — or Mark all Yes."
+            )
+        }
+        if hour >= 17 {
+            return (
+                "Evening wrap-up",
+                count == 0
+                    ? "Add a subject to start logging."
+                    : count == 1
+                        ? "Log today’s class before you sleep."
+                        : "Swipe to finish all \(count) \(subjectWord) before you sleep."
+            )
+        }
+        return (
+            "Today's Classes",
+            count == 0
+                ? "Add a subject to start logging."
+                : usingTimetableFilter
+                    ? "\(count) \(subjectWord) today — swipe to mark each."
+                    : "No timetable for today — swipe and mark each."
+        )
     }
 
     var body: some View {
         ZStack {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 14) {
                 header
-                content
+                if subjectsToday.isEmpty {
+                    emptyContent
+                } else {
+                    if unmarkedSubjects.isEmpty == false && subjectsToday.count >= 2 {
+                        markAllYesButton
+                    }
+
+                    subjectPager
+
+                    if subjectsToday.count > 1 {
+                        if didDiscoverPaging == false {
+                            swipeHint
+                        }
+                        pageControls
+                        subjectChips
+                    }
+                }
             }
             .padding(18)
             .background(
@@ -115,222 +140,357 @@ struct MarkTodayCard: View {
             if showCelebration {
                 CelebrationToast(
                     message: "Great!",
-                    subtitle: "Today's attendance saved."
+                    subtitle: markedCount >= subjectsToday.count && subjectsToday.isEmpty == false
+                        ? "All subjects logged for today."
+                        : "Today's attendance saved."
                 )
                 .transition(.move(edge: .top).combined(with: .opacity))
                 .padding(.top, -8)
             }
         }
-        .onAppear(perform: loadState)
-        .onChange(of: reloadKey) { _, _ in loadState() }
-    }
-
-    @ViewBuilder
-    private var content: some View {
-        if scheduledByTimetable > 0 {
-            scheduledDayContent
-        } else if useDirectLogging {
-            untrackedDayContent
-        } else if isLoggingAnyway || hasLoggedClass {
-            logAnywayContent
-        } else {
-            noClassContent
+        .onAppear {
+            didDiscoverPaging = UserDefaults.standard.bool(forKey: didDiscoverPagingKey)
+            ensureSelection()
+            startNudgeIfNeeded()
+        }
+        .onChange(of: subjectsToday.map(\.id)) { _, _ in
+            ensureSelection()
         }
     }
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Today's Classes")
+                Text(promptCopy.title)
                     .font(.system(size: 18, weight: .black, design: .rounded))
                     .foregroundStyle(.white)
-                Text(today.formatted(.dateTime.weekday(.wide).month(.abbreviated).day()))
+                Text(promptCopy.subtitle)
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.55))
+                Text(today.formatted(.dateTime.weekday(.wide).month(.abbreviated).day()))
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.4))
             }
             Spacer()
-            if existingEntry != nil {
-                Label("Saved", systemImage: "checkmark.seal.fill")
+            if subjectsToday.isEmpty == false {
+                Text("\(markedCount)/\(subjectsToday.count)")
                     .font(.system(size: 12, weight: .bold, design: .rounded))
-                    .foregroundStyle(attendedTint)
+                    .foregroundStyle(markedCount == subjectsToday.count ? attendedTint : .white.opacity(0.55))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(Color.white.opacity(0.08))
+                    )
             }
         }
     }
 
-    // MARK: - States
-
-    private var scheduledDayContent: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text(scheduledByTimetable == 1
-                  ? "Did you attend?"
-                  : "\(scheduledByTimetable) classes today — did you attend?")
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.72))
-
-            choiceRow()
-
-            if effectiveScheduled > 1 && currentChoice == .attended {
-                partialStepper
-            }
-        }
-    }
-
-    private var untrackedDayContent: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Did you attend?")
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.72))
-
-            choiceRow()
-        }
-    }
-
-    private var noClassContent: some View {
+    private var emptyContent: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(isDefaultHolidayToday
-                 ? "Today is a holiday — it won't affect your attendance."
-                 : "No classes scheduled today.")
+            Text("Add your first subject to mark today's classes.")
                 .font(.system(size: 13, weight: .semibold, design: .rounded))
                 .foregroundStyle(.white.opacity(0.7))
-
-            Button {
-                AttendanceLogHaptics.tap()
-                withAnimation(.easeInOut(duration: 0.2)) { isLoggingAnyway = true }
-            } label: {
-                Label("Log a class anyway", systemImage: "plus.circle.fill")
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .foregroundStyle(accentTint)
-            }
-            .buttonStyle(LogPressStyle())
-        }
-    }
-
-    private var logAnywayContent: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text("Logging a class for today")
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.7))
-                Spacer()
-                Button(existingEntry == nil ? "Cancel" : "Remove") {
-                    removeOrCancel()
+            if let onAddSubject {
+                Button(action: onAddSubject) {
+                    Text("Add subject")
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                        .foregroundStyle(.black.opacity(0.9))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(accentTint)
+                        )
                 }
-                .font(.system(size: 12, weight: .bold, design: .rounded))
-                .foregroundStyle(missedTint.opacity(0.95))
                 .buttonStyle(LogPressStyle())
             }
-
-            countStepper(title: "Classes held: \(effectiveScheduled)", value: $manualScheduled, range: 1...12)
-
-            choiceRow(showHoliday: false)
-
-            if effectiveScheduled > 1 && currentChoice == .attended {
-                partialStepper
-            }
         }
     }
 
-    // MARK: - Choice controls
-
-    private func choiceRow(showHoliday: Bool = true) -> some View {
-        HStack(spacing: 8) {
-            choiceButton(.attended, title: "Yes", systemImage: "checkmark", tint: attendedTint)
-            choiceButton(.missed, title: "Missed", systemImage: "xmark", tint: missedTint)
-            if showHoliday {
-                choiceButton(.holiday, title: "Holiday", systemImage: "sun.max", tint: accentTint)
-            }
-        }
-    }
-
-    private func choiceButton(_ choice: DayChoice, title: String, systemImage: String, tint: Color) -> some View {
-        let isSelected = currentChoice == choice
-        return Button {
-            apply(choice)
+    private var markAllYesButton: some View {
+        Button {
+            markAllUnmarkedAttended()
         } label: {
-            VStack(spacing: 6) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 16, weight: .bold))
-                Text(title)
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 14, weight: .bold))
+                Text(unmarkedSubjects.count == 1
+                      ? "Mark remaining Yes"
+                      : "Mark all \(unmarkedSubjects.count) Yes")
                     .font(.system(size: 13, weight: .bold, design: .rounded))
+                Spacer(minLength: 0)
             }
-            .foregroundStyle(isSelected ? Color.black : Color.white.opacity(0.9))
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
+            .foregroundStyle(.black)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
             .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(isSelected ? tint : Color.white.opacity(0.08))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .stroke(isSelected ? Color.clear : tint.opacity(0.35), lineWidth: 1)
-                    )
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(attendedTint)
             )
         }
         .buttonStyle(LogPressStyle())
+        .accessibilityLabel("Mark all remaining subjects as attended")
     }
 
-    private var partialStepper: some View {
-        Stepper {
-            Text("Attended \(partialAttended) of \(effectiveScheduled)")
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.9))
-        } onIncrement: {
-            partialAttended = min(effectiveScheduled, partialAttended + 1)
-            saveClass(attended: partialAttended)
-        } onDecrement: {
-            partialAttended = max(0, partialAttended - 1)
-            saveClass(attended: partialAttended)
+    private var subjectPager: some View {
+        TabView(selection: pagerSelection) {
+            ForEach(subjectsToday) { subject in
+                MarkTodaySubjectRow(
+                    subject: subject,
+                    scheduledCount: max(1, subjectStore.classesScheduledToday(for: subject.id, on: today)),
+                    entry: subjectStore.logEntry(subjectID: subject.id, date: today),
+                    attendedTint: attendedTint,
+                    missedTint: missedTint,
+                    accentTint: accentTint,
+                    onChoice: { choice in
+                        apply(choice, for: subject)
+                    }
+                )
+                .padding(.horizontal, 2)
+                .tag(subject.id)
+            }
         }
-        .tint(accentTint)
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        .frame(height: 148)
     }
 
-    private func countStepper(title: String, value: Binding<Int>, range: ClosedRange<Int>) -> some View {
-        Stepper(value: value, in: range) {
-            Text(title)
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.9))
+    /// Marks paging as discovered when the user swipes the pager (not on programmatic jumps).
+    private var pagerSelection: Binding<UUID> {
+        Binding(
+            get: { selectedSubjectID },
+            set: { newValue in
+                guard newValue != selectedSubjectID else { return }
+                selectedSubjectID = newValue
+                markPagingDiscovered()
+            }
+        )
+    }
+
+    private var swipeHint: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "hand.draw.fill")
+                .font(.system(size: 13, weight: .bold))
+            Text("Swipe or tap arrows for the next subject")
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+            Spacer(minLength: 0)
         }
-        .tint(accentTint)
+        .foregroundStyle(accentTint)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(accentTint.opacity(0.12))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(accentTint.opacity(0.35), lineWidth: 1)
+                )
+        )
+        .transition(.opacity.combined(with: .move(edge: .top)))
     }
 
-    // MARK: - Actions
+    private var pageControls: some View {
+        HStack(spacing: 10) {
+            Button {
+                goToRelativePage(-1)
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(currentPageIndex > 0 ? Color.white : Color.white.opacity(0.25))
+                    .frame(width: 40, height: 40)
+                    .background(
+                        Circle()
+                            .fill(Color.white.opacity(currentPageIndex > 0 ? 0.12 : 0.05))
+                    )
+            }
+            .buttonStyle(LogPressStyle())
+            .disabled(currentPageIndex <= 0)
+            .accessibilityLabel("Previous subject")
 
-    private func apply(_ choice: DayChoice) {
-        guard let id = subjectID else { return }
-        let wasNew = existingEntry == nil
+            VStack(spacing: 6) {
+                HStack(spacing: 6) {
+                    ForEach(subjectsToday) { subject in
+                        let isCurrent = subject.id == selectedSubjectID
+                        let isMarked = subjectStore.logEntry(subjectID: subject.id, date: today) != nil
+                        Capsule(style: .continuous)
+                            .fill(
+                                isCurrent
+                                    ? accentTint
+                                    : (isMarked ? attendedTint.opacity(0.55) : Color.white.opacity(0.22))
+                            )
+                            .frame(width: isCurrent ? 16 : 7, height: 7)
+                    }
+                }
+                Text("\(min(currentPageIndex + 1, subjectsToday.count)) of \(subjectsToday.count)")
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.5))
+            }
+            .frame(maxWidth: .infinity)
+
+            Button {
+                goToRelativePage(1)
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(
+                        currentPageIndex < subjectsToday.count - 1 ? Color.white : Color.white.opacity(0.25)
+                    )
+                    .frame(width: 40, height: 40)
+                    .background(
+                        Circle()
+                            .fill(
+                                currentPageIndex < subjectsToday.count - 1
+                                    ? accentTint.opacity(nudgeChevron ? 0.45 : 0.22)
+                                    : Color.white.opacity(0.05)
+                            )
+                    )
+                    .scaleEffect(nudgeChevron && currentPageIndex < subjectsToday.count - 1 ? 1.08 : 1.0)
+            }
+            .buttonStyle(LogPressStyle())
+            .disabled(currentPageIndex >= subjectsToday.count - 1)
+            .accessibilityLabel("Next subject")
+        }
+    }
+
+    private var subjectChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(subjectsToday) { subject in
+                    let isCurrent = subject.id == selectedSubjectID
+                    let isMarked = subjectStore.logEntry(subjectID: subject.id, date: today) != nil
+                    Button {
+                        AttendanceLogHaptics.tap()
+                        withAnimation(.easeInOut(duration: 0.22)) {
+                            selectedSubjectID = subject.id
+                        }
+                        markPagingDiscovered()
+                    } label: {
+                        HStack(spacing: 5) {
+                            if isMarked {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 11, weight: .bold))
+                                    .foregroundStyle(isCurrent ? Color.black : attendedTint)
+                            }
+                            Text(subject.name)
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
+                                .lineLimit(1)
+                        }
+                        .foregroundStyle(isCurrent ? Color.black : Color.white.opacity(0.85))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(isCurrent ? accentTint : Color.white.opacity(0.08))
+                        )
+                    }
+                    .buttonStyle(LogPressStyle())
+                }
+            }
+        }
+    }
+
+    private func goToRelativePage(_ delta: Int) {
+        let ids = subjectsToday.map(\.id)
+        guard let index = ids.firstIndex(of: selectedSubjectID) else { return }
+        let next = index + delta
+        guard ids.indices.contains(next) else { return }
         AttendanceLogHaptics.tap()
+        withAnimation(.easeInOut(duration: 0.22)) {
+            selectedSubjectID = ids[next]
+        }
+        markPagingDiscovered()
+    }
+
+    private func markPagingDiscovered() {
+        guard didDiscoverPaging == false else { return }
+        didDiscoverPaging = true
+        nudgeChevron = false
+        UserDefaults.standard.set(true, forKey: didDiscoverPagingKey)
+    }
+
+    private func startNudgeIfNeeded() {
+        guard didDiscoverPaging == false, subjectsToday.count > 1 else { return }
+        withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) {
+            nudgeChevron = true
+        }
+    }
+
+    private func ensureSelection() {
+        let ids = subjectsToday.map(\.id)
+        guard let first = ids.first else { return }
+        if ids.contains(selectedSubjectID) { return }
+        selectedSubjectID = unmarkedSubjects.first?.id ?? first
+    }
+
+    private func advanceToNextUnmarked(after subjectID: UUID) {
+        let ids = subjectsToday.map(\.id)
+        guard let index = ids.firstIndex(of: subjectID) else { return }
+        let rotated = Array(subjectsToday[(index + 1)...]) + Array(subjectsToday[..<index])
+        if let next = rotated.first(where: { subjectStore.logEntry(subjectID: $0.id, date: today) == nil }) {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                selectedSubjectID = next.id
+            }
+        }
+    }
+
+    private func markAllUnmarkedAttended() {
+        let targets = unmarkedSubjects
+        guard targets.isEmpty == false else { return }
+        AttendanceLogHaptics.tap()
+        for subject in targets {
+            apply(.attended, for: subject, celebrate: false, advance: false)
+        }
+        triggerCelebration()
+        ensureSelection()
+    }
+
+    private func apply(
+        _ choice: DayChoice,
+        for subject: SubjectSummary,
+        celebrate: Bool = true,
+        advance: Bool = true
+    ) {
+        let wasNew = subjectStore.logEntry(subjectID: subject.id, date: today) == nil
+        let scheduled = max(1, subjectStore.classesScheduledToday(for: subject.id, on: today))
+        if celebrate {
+            AttendanceLogHaptics.tap()
+        }
         switch choice {
         case .attended:
-            partialAttended = effectiveScheduled
             subjectStore.markDay(
-                subjectID: id,
+                subjectID: subject.id,
                 date: today,
-                attendedCount: effectiveScheduled,
-                scheduledCount: effectiveScheduled,
+                attendedCount: scheduled,
+                scheduledCount: scheduled,
                 isHoliday: false,
-                source: "mark_today"
+                source: "mark_today_multi"
             )
         case .missed:
-            partialAttended = 0
             subjectStore.markDay(
-                subjectID: id,
+                subjectID: subject.id,
                 date: today,
                 attendedCount: 0,
-                scheduledCount: effectiveScheduled,
+                scheduledCount: scheduled,
                 isHoliday: false,
-                source: "mark_today"
+                source: "mark_today_multi"
             )
         case .holiday:
             subjectStore.markDay(
-                subjectID: id,
+                subjectID: subject.id,
                 date: today,
                 attendedCount: 0,
                 scheduledCount: 0,
                 isHoliday: true,
-                source: "mark_today"
+                source: "mark_today_multi"
             )
         }
-        if wasNew {
+        if celebrate && wasNew {
             triggerCelebration()
+        }
+        if advance && wasNew {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                advanceToNextUnmarked(after: subject.id)
+            }
         }
     }
 
@@ -347,37 +507,86 @@ struct MarkTodayCard: View {
             }
         }
     }
+}
 
-    private func saveClass(attended: Int) {
-        guard let id = subjectID else { return }
-        subjectStore.markDay(
-            subjectID: id,
-            date: today,
-            attendedCount: attended,
-            scheduledCount: effectiveScheduled,
-            isHoliday: false,
-            source: "mark_today_partial"
+private struct MarkTodaySubjectRow: View {
+    let subject: SubjectSummary
+    let scheduledCount: Int
+    let entry: AttendanceLogEntry?
+    let attendedTint: Color
+    let missedTint: Color
+    let accentTint: Color
+    let onChoice: (MarkTodayCard.DayChoice) -> Void
+
+    private var current: MarkTodayCard.DayChoice? {
+        guard let entry else { return nil }
+        if entry.isHoliday { return .holiday }
+        if entry.scheduledClasses <= 0 { return nil }
+        return entry.attendedClasses <= 0 ? .missed : .attended
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(subject.name)
+                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                    Text(scheduledCount == 1
+                          ? "1 class today"
+                          : "\(scheduledCount) classes today")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+                Spacer()
+                if entry != nil {
+                    Image(systemName: "checkmark.seal.fill")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(attendedTint)
+                }
+            }
+
+            HStack(spacing: 8) {
+                choiceButton(.attended, title: "Yes", systemImage: "checkmark", tint: attendedTint)
+                choiceButton(.missed, title: "Missed", systemImage: "xmark", tint: missedTint)
+                choiceButton(.holiday, title: "Holiday", systemImage: "sun.max", tint: accentTint)
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                )
         )
     }
 
-    private func removeOrCancel() {
-        AttendanceLogHaptics.tap()
-        if let id = subjectID, existingEntry != nil {
-            subjectStore.clearDay(subjectID: id, date: today, source: "mark_today")
+    private func choiceButton(_ choice: MarkTodayCard.DayChoice, title: String, systemImage: String, tint: Color) -> some View {
+        let isSelected = current == choice
+        return Button {
+            onChoice(choice)
+        } label: {
+            VStack(spacing: 4) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 14, weight: .bold))
+                Text(title)
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+            }
+            .foregroundStyle(isSelected ? Color.black : Color.white.opacity(0.9))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(isSelected ? tint : Color.white.opacity(0.08))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(isSelected ? Color.clear : tint.opacity(0.35), lineWidth: 1)
+                    )
+            )
         }
-        withAnimation(.easeInOut(duration: 0.2)) { isLoggingAnyway = false }
-    }
-
-    private func loadState() {
-        if let entry = existingEntry {
-            manualScheduled = max(1, entry.scheduledClasses)
-            partialAttended = min(max(0, entry.attendedClasses), max(1, entry.scheduledClasses))
-            isLoggingAnyway = hasLoggedClass
-        } else {
-            manualScheduled = 1
-            partialAttended = effectiveScheduled
-            isLoggingAnyway = false
-        }
+        .buttonStyle(LogPressStyle())
     }
 }
 
@@ -386,8 +595,11 @@ struct MarkTodayCard: View {
 struct AttendanceLogView: View {
     @ObservedObject var subjectStore: SubjectStore
 
+    @ObservedObject private var entitlements = AdEntitlementsStore.shared
     @State private var visibleMonth = Date()
     @State private var editingDay: Date?
+    @State private var skipPlannerDay: Date?
+    @State private var isShowingProPaywall = false
 
     private let calendar = Calendar.current
 
@@ -420,6 +632,7 @@ struct AttendanceLogView: View {
             monthGrid
             monthSummary
             legend
+            skipPlannerHint
         }
         .padding(18)
         .background(
@@ -448,6 +661,25 @@ struct AttendanceLogView: View {
                 .preferredColorScheme(.dark)
                 .analyticsScreen(.dayEditor)
             }
+        }
+        .sheet(
+            isPresented: Binding(
+                get: { skipPlannerDay != nil },
+                set: { if $0 == false { skipPlannerDay = nil } }
+            )
+        ) {
+            if let day = skipPlannerDay {
+                SkipPlannerSheet(
+                    result: SkipPlanner.evaluate(
+                        date: day,
+                        subjects: subjectStore.selectedSubject.map { [$0] } ?? subjectStore.subjects
+                    ),
+                    subjectFilterName: subjectStore.selectedSubjectName
+                )
+            }
+        }
+        .sheet(isPresented: $isShowingProPaywall) {
+            ProPaywallView(source: "skip_planner")
         }
     }
 
@@ -540,26 +772,44 @@ struct AttendanceLogView: View {
         )
         let isFuture = normalized > calendar.startOfDay(for: Date())
         let isToday = calendar.isDateInToday(day)
+        let skipRisk: SkipDayRisk? = {
+            guard isFuture, scheduled > 0, let subject = subjectStore.selectedSubject else { return nil }
+            return SkipPlanner.evaluate(date: day, subjects: [subject]).riskLevel
+        }()
 
         return Button {
-            guard !isFuture else { return }
+            if isFuture {
+                guard scheduled > 0 else { return }
+                AttendanceLogHaptics.tap()
+                if entitlements.isPro {
+                    skipPlannerDay = day
+                } else {
+                    AnalyticsService.shared.log(.skipPlannerLocked)
+                    isShowingProPaywall = true
+                }
+                return
+            }
             AttendanceLogHaptics.tap()
             editingDay = day
         } label: {
             VStack(spacing: 4) {
                 Text("\(calendar.component(.day, from: day))")
                     .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .foregroundStyle(isFuture ? .white.opacity(0.25) : .white.opacity(0.9))
-                Circle()
-                    .fill(status.tint)
-                    .frame(width: 7, height: 7)
-                    .opacity(status == .noClass ? 0 : 1)
+                    .foregroundStyle(isFuture ? .white.opacity(scheduled > 0 ? 0.7 : 0.25) : .white.opacity(0.9))
+                if isFuture {
+                    futureMarker(scheduled: scheduled, risk: skipRisk)
+                } else {
+                    Circle()
+                        .fill(status.tint)
+                        .frame(width: 7, height: 7)
+                        .opacity(status == .noClass ? 0 : 1)
+                }
             }
             .frame(maxWidth: .infinity)
             .frame(height: 44)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(status == .noClass ? Color.white.opacity(0.03) : status.tint.opacity(0.14))
+                    .fill(status == .noClass && isFuture == false ? Color.white.opacity(0.03) : (isFuture ? Color.white.opacity(scheduled > 0 ? 0.06 : 0.03) : status.tint.opacity(0.14)))
                     .overlay(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .stroke(
@@ -570,7 +820,34 @@ struct AttendanceLogView: View {
             )
         }
         .buttonStyle(LogPressStyle())
-        .disabled(isFuture)
+        .disabled(isFuture && scheduled == 0)
+    }
+
+    @ViewBuilder
+    private func futureMarker(scheduled: Int, risk: SkipDayRisk?) -> some View {
+        if scheduled <= 0 {
+            Circle()
+                .fill(Color.clear)
+                .frame(width: 7, height: 7)
+        } else if entitlements.isPro, let risk {
+            Circle()
+                .fill(skipTint(risk))
+                .frame(width: 7, height: 7)
+        } else {
+            Image(systemName: "lock.fill")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(Color(red: 1.0, green: 0.78, blue: 0.28).opacity(0.85))
+                .frame(width: 7, height: 7)
+        }
+    }
+
+    private func skipTint(_ risk: SkipDayRisk) -> Color {
+        switch risk {
+        case .safe: return Color(red: 0.2, green: 0.9, blue: 0.5)
+        case .mixed: return Color.orange
+        case .unsafe: return Color.red
+        case .noClass: return Color.clear
+        }
     }
 
     private var monthSummary: some View {
@@ -592,6 +869,14 @@ struct AttendanceLogView: View {
     private var legend: some View {
         let items: [DayMarkStatus] = [.attendedAll, .partial, .missed, .holiday, .unmarked]
         return FlexibleLegend(items: items)
+    }
+
+    private var skipPlannerHint: some View {
+        Text(entitlements.isPro
+             ? "Tap a future class day to see if you can skip without dropping below target."
+             : "Pro: tap a future class day to check if a skip stays safe.")
+            .font(.system(size: 12, weight: .medium, design: .rounded))
+            .foregroundStyle(.white.opacity(0.45))
     }
 
     private func summaryChip(title: String, value: String) -> some View {
@@ -651,11 +936,12 @@ struct AttendanceLogView: View {
     private var canGoForward: Bool {
         guard
             let current = calendar.dateInterval(of: .month, for: visibleMonth),
-            let thisMonth = calendar.dateInterval(of: .month, for: Date())
+            let thisMonth = calendar.dateInterval(of: .month, for: Date()),
+            let maxMonth = calendar.date(byAdding: .month, value: 1, to: thisMonth.start)
         else {
             return false
         }
-        return current.start < thisMonth.start
+        return current.start < maxMonth
     }
 
     private func shiftMonth(by value: Int) {

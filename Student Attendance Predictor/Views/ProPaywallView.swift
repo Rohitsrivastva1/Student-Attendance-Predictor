@@ -25,17 +25,43 @@ struct ProPaywallView: View {
     @State private var crownSpin = false
     @State private var showSuccess = false
     @State private var successBurst = false
+    @State private var paywallAppearedAt = Date()
+    @State private var didStartPurchase = false
+    @State private var didLogPriceShown = false
+    @State private var didLogDismiss = false
+    @State private var didPurchaseSucceed = false
 
     private let cyan = Color(red: 0.32, green: 0.84, blue: 1.0)
     private let gold = Color(red: 1.0, green: 0.78, blue: 0.28)
     private let warmGlow = Color(red: 1.0, green: 0.62, blue: 0.22)
 
-    private let features: [(icon: String, title: String, subtitle: String)] = [
-        ("sparkles", "Study without interruptions", "Banners and full-screen ads stay gone for good."),
-        ("chart.line.uptrend.xyaxis", "Never lose forecast access", "Subject forecasts stay unlocked — no daily ad unlocks."),
-        ("hammer.fill", "Support future features", "One purchase keeps Bunk Planner growing for students like you."),
-        ("checkmark.seal.fill", "Lifetime purchase", "No subscriptions. Restorable on all your devices.")
-    ]
+    private var features: [(icon: String, title: String, subtitle: String)] {
+        let skipVerb = StudentMarketStore.current.skipVerb
+        let ads = ("sparkles", "Study without interruptions", "Banners and full-screen ads stay gone for good.")
+        let forecast = ("chart.line.uptrend.xyaxis", "Semester forecast for every subject", "See where each subject lands before you skip — not just today's %.")
+        let subjects = ("books.vertical.fill", "Unlimited subjects", "Free includes \(ProPurchaseConfiguration.freeSubjectLimit). Pro tracks your full timetable.")
+        let exports = ("square.and.arrow.up.fill", "PDF + CSV export", "Parent-ready PDF and a spreadsheet of every logged day.")
+        let skip = ("calendar.badge.checkmark", "Skip planner", "Tap a future class day and see who stays safe if you \(skipVerb).")
+        let focus = ("timer", "Custom Focus Timer", "90-minute sessions, custom lengths, longer breaks, and a weekly study recap.")
+        switch source {
+        case "forecast", "locked_forecast":
+            return [forecast, skip, subjects, exports, focus, ads]
+        case "at_risk_week", "at_risk_home", "at_risk_week_3":
+            return [forecast, skip, subjects, exports, focus, ads]
+        case "subject_limit":
+            return [subjects, skip, forecast, exports, focus, ads]
+        case "pdf_export", "csv_export":
+            return [exports, skip, forecast, subjects, focus, ads]
+        case "skip_planner":
+            return [skip, forecast, subjects, exports, focus, ads]
+        case "focus_custom":
+            return [focus, skip, forecast, subjects, exports, ads]
+        case "streak_7", "habit_value":
+            return [skip, forecast, subjects, exports, focus, ads]
+        default:
+            return [skip, forecast, subjects, exports, focus, ads]
+        }
+    }
 
     var body: some View {
         ZStack {
@@ -50,17 +76,42 @@ struct ProPaywallView: View {
         }
         .preferredColorScheme(.dark)
         .onAppear {
+            paywallAppearedAt = Date()
+            didStartPurchase = false
+            didLogPriceShown = false
+            didLogDismiss = false
+            didPurchaseSucceed = false
+            AnalyticsService.shared.setLastProPaywallSource(source)
             AnalyticsService.shared.log(.proPaywallViewed(source: source))
             ProPurchaseService.shared.start()
-            Task { await purchaseService.loadProduct() }
+            Task {
+                await purchaseService.loadProduct(surfaceFailure: false)
+                if purchaseService.isAvailable {
+                    logPriceShownIfNeeded()
+                } else {
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    await purchaseService.loadProduct(surfaceFailure: false)
+                    logPriceShownIfNeeded(forceUnavailable: true)
+                }
+            }
             withAnimation(.easeOut(duration: 0.7)) { appearHero = true }
             withAnimation(.easeOut(duration: 0.7).delay(0.12)) { appearFeatures = true }
             withAnimation(.easeOut(duration: 0.7).delay(0.22)) { appearCTA = true }
             withAnimation(.easeInOut(duration: 3.2).repeatForever(autoreverses: true)) { orbPulse = true }
             withAnimation(.easeInOut(duration: 4.5).repeatForever(autoreverses: true)) { crownSpin = true }
         }
+        .onDisappear {
+            logPaywallDismissedIfNeeded()
+        }
+        .onChange(of: purchaseService.displayPrice) { _, _ in
+            logPriceShownIfNeeded()
+        }
+        .onChange(of: purchaseService.isAvailable) { _, _ in
+            logPriceShownIfNeeded()
+        }
         .onChange(of: purchaseService.phase) { _, newPhase in
             if newPhase == .success, entitlements.isPro {
+                didPurchaseSucceed = true
                 triggerSuccess()
             }
         }
@@ -129,6 +180,7 @@ struct ProPaywallView: View {
             HStack {
                 Spacer()
                 Button {
+                    logPaywallDismissedIfNeeded()
                     dismiss()
                 } label: {
                     Image(systemName: "xmark")
@@ -226,7 +278,7 @@ struct ProPaywallView: View {
                     .foregroundStyle(cyan)
                     .tracking(2.4)
 
-                Text("Go Pro")
+                Text(heroHeadline)
                     .font(.system(size: 40, weight: .black, design: .rounded))
                     .foregroundStyle(
                         LinearGradient(
@@ -236,7 +288,7 @@ struct ProPaywallView: View {
                         )
                     )
 
-                Text("One purchase. Zero ads. Forecasts unlocked for good.")
+                Text(heroSubtitle)
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.72))
                     .multilineTextAlignment(.center)
@@ -417,7 +469,7 @@ struct ProPaywallView: View {
                     .font(.system(size: 34, weight: .black, design: .rounded))
                     .foregroundStyle(.white)
 
-                Text("Ads are off. Forecasts stay unlocked.\nWelcome to the quieter side of bunk planning.")
+                Text("Ads are off. Skip planner, forecast, unlimited subjects,\nPDF + CSV, and custom Focus Timer are yours.")
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.7))
                     .multilineTextAlignment(.center)
@@ -453,6 +505,56 @@ struct ProPaywallView: View {
 
     // MARK: - Actions
 
+    private var heroHeadline: String {
+        let market = StudentMarketStore.current
+        switch source {
+        case "forecast", "locked_forecast":
+            return market == .india ? "Know before you bunk" : "Know before you skip"
+        case "at_risk_week", "at_risk_home", "at_risk_week_3":
+            return market == .india ? "Don't get detained" : "Protect your attendance"
+        case "subject_limit":
+            return "Track every \(market.courseNoun)"
+        case "pdf_export", "csv_export":
+            return "Share the proof"
+        case "skip_planner":
+            return market == .india ? "Know before you bunk" : "Know before you skip"
+        case "focus_custom":
+            return "Study on your clock"
+        case "streak_7":
+            return "Keep the streak"
+        case "habit_value":
+            return "Plan the semester"
+        default:
+            return "Go Pro"
+        }
+    }
+
+    private var heroSubtitle: String {
+        let skip = StudentMarketStore.current.skipVerb
+        switch source {
+        case "forecast", "locked_forecast":
+            return "Unlock semester forecast — know who you can \(skip) before it's too late."
+        case "at_risk_week", "at_risk_home", "at_risk_week_3":
+            return "See exactly how many classes it takes to get back above target."
+        case "subject_limit":
+            return "Free includes \(ProPurchaseConfiguration.freeSubjectLimit) subjects. Pro tracks the full timetable."
+        case "pdf_export":
+            return "Parent-ready PDF with attendance + grades. One tap to share."
+        case "csv_export":
+            return "Export every logged day as a spreadsheet — plus the parent-ready PDF."
+        case "skip_planner":
+            return "See exactly which future class days stay safe if you \(skip) — before you decide."
+        case "focus_custom":
+            return "90-minute sessions, custom lengths, longer breaks, and a weekly study recap."
+        case "streak_7":
+            return "Unlock semester forecast and track every subject — you've built the habit."
+        case "habit_value":
+            return "See where each subject lands by semester end — you've been logging consistently."
+        default:
+            return "Skip planner, semester forecast, unlimited subjects, and PDF + CSV — one lifetime purchase."
+        }
+    }
+
     private var isBusy: Bool {
         switch purchaseService.phase {
         case .purchasing, .restoring, .loading:
@@ -470,23 +572,88 @@ struct ProPaywallView: View {
             return "Unlocking…"
         default:
             if let price = purchaseService.displayPrice {
-                return "Unlock Pro — \(price)"
+                return "Unlock Pro — \(price) lifetime"
             }
-            return "Unlock Pro"
+            return "Unlock Pro — pay once"
         }
     }
 
     private func buy() async {
+        didStartPurchase = true
         AnalyticsService.shared.log(.proPurchaseStarted(source: source))
         let ok = await purchaseService.purchase()
         if ok {
-            AnalyticsService.shared.log(.proPurchaseSucceeded(source: source))
-            AnalyticsUserProfile.sync(subjectStore: nil)
-        } else if case .failed = purchaseService.phase {
-            AnalyticsService.shared.log(.proPurchaseFailed(source: source, reason: "failed"))
+            didPurchaseSucceed = true
+            // Success + revenue logged in ProPurchaseService.finish (deduped by transaction id).
+        } else if case let .failed(message) = purchaseService.phase {
+            AnalyticsService.shared.log(
+                .proPurchaseFailed(source: source, reason: Self.analyticsFailureReason(message))
+            )
         } else {
             AnalyticsService.shared.log(.proPurchaseCancelled(source: source))
         }
+    }
+
+    private func logPriceShownIfNeeded(forceUnavailable: Bool = false) {
+        guard didLogPriceShown == false else { return }
+        if let price = purchaseService.displayPrice, purchaseService.isAvailable {
+            didLogPriceShown = true
+            AnalyticsService.shared.log(
+                .proPriceShown(
+                    source: source,
+                    price: price,
+                    currency: purchaseService.currencyCode ?? "",
+                    available: true
+                )
+            )
+            return
+        }
+        guard forceUnavailable || {
+            if case .failed = purchaseService.phase { return true }
+            return false
+        }() else { return }
+        didLogPriceShown = true
+        AnalyticsService.shared.log(
+            .proPriceShown(source: source, price: "", currency: "", available: false)
+        )
+    }
+
+    /// X / swipe-away without a successful purchase. Not fired for StoreKit cancel
+    /// while the paywall stays open (`pro_purchase_cancelled` covers that).
+    private func logPaywallDismissedIfNeeded() {
+        guard didLogDismiss == false else { return }
+        guard didPurchaseSucceed == false, entitlements.isPro == false else { return }
+        didLogDismiss = true
+        let seconds = max(0, Int(Date().timeIntervalSince(paywallAppearedAt)))
+        AnalyticsService.shared.log(
+            .proPaywallDismissed(
+                source: source,
+                hadPrice: purchaseService.displayPrice != nil,
+                didStartPurchase: didStartPurchase,
+                secondsVisible: seconds
+            )
+        )
+    }
+
+    /// Short, stable reason tokens for Firebase (avoid free-form sentence spam).
+    private static func analyticsFailureReason(_ message: String) -> String {
+        let lower = message.lowercased()
+        if lower.contains("unavailable") || lower.contains("couldn't load") {
+            return "product_unavailable"
+        }
+        if lower.contains("offline") || lower.contains("internet") || lower.contains("network") {
+            return "network"
+        }
+        if lower.contains("pending") {
+            return "pending_approval"
+        }
+        if lower.contains("verif") {
+            return "verification_failed"
+        }
+        if lower.contains("not available on this platform") {
+            return "unsupported_platform"
+        }
+        return String(message.prefix(40))
     }
 
     private func restorePurchases() async {

@@ -2,9 +2,10 @@
 //  AdMobInterstitialService.swift
 //  Student Attendance Predictor
 //
-//  Full-screen interstitial ads shown at natural breakpoints (after marking
-//  attendance, first Insights visit per launch). Frequency-capped so users are
-//  not interrupted too often (~90s, 5/session, 8/day in release).
+//  Full-screen interstitials at natural breakpoints (first Insights / Overview
+//  visit and first Subjects open per launch). Never after Mark Today — that
+//  habit loop stays clean. Frequency caps (~90s, 3/session, 6/day in release)
+//  keep volume from feeling spammy.
 //
 
 import Foundation
@@ -28,18 +29,20 @@ final class AdMobInterstitialService: NSObject {
     #else
     private let minIntervalBetweenAds: TimeInterval = 90
     #endif
-    /// Max interstitials per app launch.
-    private let maxPerSession = 5
+    /// Max interstitials per app launch (Insights + Overview + Subjects).
+    private let maxPerSession = 3
     /// Max interstitials per calendar day.
-    private let maxPerDay = 8
+    private let maxPerDay = 6
 
     private let lastShownKey = "ads.interstitial.lastShown"
     private let dailyCountKey = "ads.interstitial.dailyCount"
     private let dailyCountDateKey = "ads.interstitial.dailyCountDate"
 
     private var sessionCount = 0
-    /// Insights interstitial fires at most once per process launch.
+    /// Each main exploration surface fires at most once per process launch.
     private var didShowInsightsInterstitialThisSession = false
+    private var didShowOverviewInterstitialThisSession = false
+    private var didShowSubjectsInterstitialThisSession = false
     private var sdkReadyObserver: NSObjectProtocol?
 
     #if canImport(GoogleMobileAds)
@@ -79,7 +82,8 @@ final class AdMobInterstitialService: NSObject {
         #endif
     }
 
-    /// Shows an interstitial after the user marks attendance, if caps and consent allow.
+    /// Legacy placement — Mark Today no longer triggers interstitials (habit-loop protection).
+    @available(*, deprecated, message: "Do not call after Mark Today; use tryShowAfterInsightsOpened / Overview instead.")
     func tryShowAfterDayMarked() {
         tryShow(placement: AdMobConfiguration.Placement.afterDayMarked)
     }
@@ -89,6 +93,20 @@ final class AdMobInterstitialService: NSObject {
         guard didShowInsightsInterstitialThisSession == false else { return }
         didShowInsightsInterstitialThisSession = true
         tryShow(placement: AdMobConfiguration.Placement.afterInsightsOpened)
+    }
+
+    /// Shows an interstitial on the first Overview visit this launch (natural tab transition).
+    func tryShowAfterOverviewOpened() {
+        guard didShowOverviewInterstitialThisSession == false else { return }
+        didShowOverviewInterstitialThisSession = true
+        tryShow(placement: AdMobConfiguration.Placement.afterOverviewOpened)
+    }
+
+    /// Shows an interstitial the first time Subjects is opened this launch.
+    func tryShowAfterSubjectsOpened() {
+        guard didShowSubjectsInterstitialThisSession == false else { return }
+        didShowSubjectsInterstitialThisSession = true
+        tryShow(placement: AdMobConfiguration.Placement.afterSubjectsOpened)
     }
 
     /// Attempts to present a loaded interstitial when frequency caps and entitlements allow.
@@ -241,7 +259,7 @@ final class AdMobInterstitialService: NSObject {
         recordShown()
         if let placement = pendingPlacement {
             AnalyticsService.shared.log(.interstitialAdShown(placement: placement))
-            AnalyticsService.shared.recordAdImpression("interstitial")
+            AnalyticsService.shared.recordAdImpression("interstitial", placement: placement)
         }
     }
     #endif
@@ -284,6 +302,13 @@ final class AdMobInterstitialService: NSObject {
 extension AdMobInterstitialService: FullScreenContentDelegate {
     func adDidRecordImpression(_ ad: FullScreenPresentingAd) {
         recordSuccessfulPresentation()
+    }
+
+    func adDidRecordClick(_ ad: FullScreenPresentingAd) {
+        if let placement = pendingPlacement {
+            AnalyticsService.shared.log(.interstitialAdClicked(placement: placement))
+            AnalyticsService.shared.recordAdImpression("interstitial_click", placement: placement)
+        }
     }
 
     func adDidDismissFullScreenContent(_ ad: FullScreenPresentingAd) {

@@ -18,7 +18,7 @@ struct PrivacyPolicyView: View {
 
                 section(
                     title: "Local Data Storage",
-                    body: "The app uses Core Data, UserDefaults, and on-device storage for subjects, attendance history, trends, default settings, and notification preferences. This data stays on your iPhone or iPad unless you back up the device through Apple."
+                    body: "The app uses Core Data, UserDefaults, and on-device storage for subjects, attendance history, trends, default settings, and notification preferences. This data stays on your iPhone or iPad unless you back up the device through Apple. If you export a PDF or CSV, that file is created on your device and only leaves it if you choose to share it."
                 )
 
                 section(
@@ -28,7 +28,7 @@ struct PrivacyPolicyView: View {
 
                 section(
                     title: "Analytics",
-                    body: "To understand how the app is used and to improve it, Bunk Planner uses Google Firebase Analytics. It collects anonymous, aggregated usage data such as which screens you open, which features you use (for example marking a day or watching a rewarded ad), session length, app version, device model, and OS version. This data is tied only to a random, app-generated identifier — not your name, email, or Apple ID — and is not used to read your subject names or attendance numbers. Analytics helps us see which features matter and where the app can be better."
+                    body: "To understand how the app is used and to improve it, Bunk Planner uses Google Firebase Analytics. It collects anonymous, aggregated usage data such as which screens you open, which features you use (for example marking a day), session length, app version, device model, and OS version. This data is tied only to a random, app-generated identifier — not your name, email, or Apple ID — and is not used to read your subject names or attendance numbers. Analytics helps us see which features matter and where the app can be better."
                 )
 
                 section(
@@ -43,7 +43,7 @@ struct PrivacyPolicyView: View {
 
                 section(
                     title: "Notifications",
-                    body: "Optional local reminders (attendance alerts, class reminders) are scheduled on your device only. They do not upload your data to SchoolAbe or third-party servers."
+                    body: "Optional local reminders (attendance alerts, daily mark reminders, and for Pro a Sunday weekly digest) are scheduled on your device only. They do not upload your data to SchoolAbe or third-party servers. You can switch witty copy off in Settings."
                 )
 
                 section(

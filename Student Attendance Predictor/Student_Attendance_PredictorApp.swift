@@ -18,6 +18,7 @@ struct Student_Attendance_PredictorApp: App {
         // Configure analytics (Firebase if available) before anything is logged.
         AnalyticsBootstrap.configureFirebaseIfAvailable()
         AnalyticsService.shared.start()
+        AcquisitionAttribution.shared.start()
         NotificationAnalyticsDelegate.shared.register()
         ProPurchaseService.shared.start()
 
@@ -29,6 +30,12 @@ struct Student_Attendance_PredictorApp: App {
         WindowGroup {
             ContentView()
                 .trackScenePhase(scenePhase)
+                .onOpenURL { url in
+                    AcquisitionAttribution.shared.handleIncomingURL(url)
+                }
+                .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
+                    AcquisitionAttribution.shared.handleUserActivity(activity)
+                }
         }
     }
 }

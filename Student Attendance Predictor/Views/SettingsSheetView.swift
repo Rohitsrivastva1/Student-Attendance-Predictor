@@ -15,12 +15,11 @@ struct SettingsSheetView: View {
     @State private var selectedMarket: StudentMarket
     @State private var rateErrorMessage: String?
     @State private var adPrivacyErrorMessage: String?
-    @State private var rewardErrorMessage: String?
     @State private var showAdPrivacyChoices = false
-    @State private var isPresentingRewardedAd = false
     @State private var isShowingProPaywall = false
     @ObservedObject private var entitlements = AdEntitlementsStore.shared
     @AppStorage("feature.notificationsEnabled") private var notificationsEnabled = true
+    @AppStorage("feature.wittyNotificationsEnabled") private var wittyNotificationsEnabled = true
     
     private let appStoreID = "6761951427"
     private let proGold = Color(red: 1.0, green: 0.78, blue: 0.28)
@@ -45,7 +44,7 @@ struct SettingsSheetView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Bunk Planner Pro")
                                     .font(.system(size: 15, weight: .bold, design: .rounded))
-                                Text("Ads off · Forecast unlocked")
+                                Text("Skip planner · Forecast · Ads off")
                                     .font(.system(size: 12, weight: .medium, design: .rounded))
                                     .foregroundStyle(.secondary)
                             }
@@ -57,6 +56,9 @@ struct SettingsSheetView: View {
                         .padding(.vertical, 4)
                     } else {
                         Button {
+                            AnalyticsService.shared.log(
+                                .proCtaTapped(surface: "settings_pro", action: "go_pro")
+                            )
                             isShowingProPaywall = true
                         } label: {
                             HStack(spacing: 14) {
@@ -82,7 +84,7 @@ struct SettingsSheetView: View {
                                     Text("Go Pro")
                                         .font(.system(size: 16, weight: .bold, design: .rounded))
                                         .foregroundStyle(.primary)
-                                    Text("Remove ads forever · Unlock forecast")
+                                    Text("Skip planner · Forecast · PDF + CSV · Ads off")
                                         .font(.system(size: 12, weight: .medium, design: .rounded))
                                         .foregroundStyle(.secondary)
                                 }
@@ -99,6 +101,30 @@ struct SettingsSheetView: View {
                 } header: {
                     Text("Pro")
                 }
+
+                #if DEBUG
+                Section {
+                    Button {
+                        entitlements.setProUnlocked(!entitlements.isPro)
+                    } label: {
+                        HStack {
+                            Label(
+                                entitlements.isPro ? "Disable Pro (Debug)" : "Enable Pro (Debug)",
+                                systemImage: entitlements.isPro ? "crown.fill" : "crown"
+                            )
+                            Spacer()
+                            Text(entitlements.isPro ? "ON" : "OFF")
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
+                                .foregroundStyle(entitlements.isPro ? .green : .secondary)
+                        }
+                    }
+                    Text("DEBUG builds only. Toggles Pro without StoreKit.")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(.secondary)
+                } header: {
+                    Text("Debug")
+                }
+                #endif
 
                 Section("Defaults") {
                     VStack(alignment: .leading, spacing: 8) {
@@ -179,44 +205,21 @@ struct SettingsSheetView: View {
                         Label("All ads removed with Pro", systemImage: "checkmark.seal.fill")
                             .font(.system(size: 14, weight: .semibold, design: .rounded))
                             .foregroundStyle(.green)
-                        Text("Banners, full-screen, and rewarded unlock ads stay off.")
+                        Text("Banners and full-screen ads stay off.")
                             .font(.system(size: 12, weight: .medium, design: .rounded))
                             .foregroundStyle(.secondary)
-                    } else if let remaining = entitlements.remaining(until: entitlements.bannersRemovedUntil) {
-                        Label("Ads hidden for \(remaining)", systemImage: "checkmark.seal.fill")
-                            .font(.system(size: 14, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.green)
-                        Text("Banner and full-screen ads are paused. Watch again later to extend — or Go Pro to keep them gone.")
+                    } else {
+                        Text("Free includes banner and occasional full-screen ads.")
                             .font(.system(size: 12, weight: .medium, design: .rounded))
                             .foregroundStyle(.secondary)
 
                         Button {
+                            AnalyticsService.shared.log(
+                                .proCtaTapped(surface: "settings_ads", action: "go_pro")
+                            )
                             isShowingProPaywall = true
                         } label: {
                             Label("Remove ads forever with Pro", systemImage: "crown.fill")
-                        }
-                    } else {
-                        Button {
-                            removeAdsForDay()
-                        } label: {
-                            HStack {
-                                Label("Remove ads for 24 hours", systemImage: "play.rectangle.fill")
-                                Spacer()
-                                if isPresentingRewardedAd {
-                                    ProgressView()
-                                }
-                            }
-                        }
-                        .disabled(isPresentingRewardedAd)
-
-                        Text("Watch a short rewarded video to hide all ads for 24 hours.")
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
-                            .foregroundStyle(.secondary)
-
-                        Button {
-                            isShowingProPaywall = true
-                        } label: {
-                            Label("Or go Pro — never watch an ad again", systemImage: "crown.fill")
                         }
                     }
                 }
@@ -226,10 +229,24 @@ struct SettingsSheetView: View {
                         .onChange(of: notificationsEnabled) { _, enabled in
                             AnalyticsService.shared.log(.notificationsToggled(enabled: enabled))
                             AnalyticsUserProfile.sync(subjectStore: nil, notificationsEnabled: enabled)
+                            if enabled == false {
+                                // Clears deadline reminders; attendance reminders are separate.
+                                NotificationService.rescheduleDeadlineReminders(deadlines: [])
+                            }
                         }
                     Text("Risk notifications are local alerts; no backend is used.")
                         .font(.system(size: 12, weight: .medium, design: .rounded))
                         .foregroundStyle(.secondary)
+
+                    Toggle("Witty reminder copy", isOn: $wittyNotificationsEnabled)
+                    Text("Daily reminders stay on. Turn this off for straightforward language.")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(.secondary)
+                    if entitlements.isPro {
+                        Text("Pro also sends a Sunday weekly digest of attended, missed, and at-risk subjects.")
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 Section("Privacy & Support") {
@@ -277,9 +294,8 @@ struct SettingsSheetView: View {
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
                 showAdPrivacyChoices = AdMobConsentService.isPrivacyOptionsRequired
-                // Backup preload if Settings opened without the toolbar path.
-                if entitlements.areBannersHidden == false {
-                    AdMobRewardedService.shared.preload()
+                if entitlements.isPro == false {
+                    AnalyticsService.shared.logProCtaShownOnce(surface: "settings_pro")
                 }
             }
             .sheet(isPresented: $isShowingProPaywall) {
@@ -298,18 +314,6 @@ struct SettingsSheetView: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(adPrivacyErrorMessage ?? "")
-            }
-            .alert("Rewarded Ad", isPresented: Binding(
-                get: { rewardErrorMessage != nil },
-                set: { isPresented in
-                    if isPresented == false {
-                        rewardErrorMessage = nil
-                    }
-                }
-            )) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(rewardErrorMessage ?? "")
             }
             .alert("Unable to Open App Store", isPresented: Binding(
                 get: { rateErrorMessage != nil },
@@ -361,22 +365,6 @@ struct SettingsSheetView: View {
 
         return result
     }
-    
-    private func removeAdsForDay() {
-        isPresentingRewardedAd = true
-        AnalyticsService.shared.log(.rewardedAdRequested(placement: "remove_ads"))
-        AdMobRewardedService.shared.showAd(placement: "remove_ads") { earned in
-            isPresentingRewardedAd = false
-            if earned {
-                entitlements.grantBannerRemoval()
-                AnalyticsUserProfile.sync(subjectStore: nil)
-                AnalyticsService.shared.log(.rewardedAdRewardEarned(placement: "remove_ads"))
-            } else {
-                rewardErrorMessage = "The rewarded ad couldn't be shown right now. Please try again in a moment."
-                AnalyticsService.shared.log(.rewardedAdFailed(placement: "remove_ads", reason: "not_earned"))
-            }
-        }
-    }
 
     private func openAdPrivacyChoices() {
         AnalyticsService.shared.log(.adPrivacyChoicesOpened)
@@ -396,16 +384,13 @@ struct SettingsSheetView: View {
     private func openRateUsFlow() {
         AnalyticsService.shared.log(.rateUsTapped)
         #if canImport(UIKit)
-        guard let url = URL(string: "itms-apps://itunes.apple.com/app/id\(appStoreID)?action=write-review") else {
+        // Official StoreKit deep link. Prefer https://apps.apple.com (not itunes.apple.com).
+        // Do not use canOpenURL(itms-apps:) — without LSApplicationQueriesSchemes it
+        // returns false and falsely shows "App Store is not available".
+        guard let url = URL(string: "https://apps.apple.com/app/id\(appStoreID)?action=write-review") else {
             rateErrorMessage = "Could not create App Store review URL."
             return
         }
-        
-        guard UIApplication.shared.canOpenURL(url) else {
-            rateErrorMessage = "App Store is not available on this device."
-            return
-        }
-        
         UIApplication.shared.open(url)
         #else
         rateErrorMessage = "App Store review is available on iOS only."

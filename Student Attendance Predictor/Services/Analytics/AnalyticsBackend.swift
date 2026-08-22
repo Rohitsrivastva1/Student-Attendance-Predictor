@@ -19,6 +19,21 @@ protocol AnalyticsBackend: AnyObject {
     func setUserID(_ id: String?)
     func setUserProperty(_ value: String?, forName name: String)
     func setCollectionEnabled(_ enabled: Bool)
+    /// Firebase standard purchase event for revenue reporting. Optional for backends that ignore it.
+    func logPurchase(value: Double, currency: String, productID: String)
+}
+
+extension AnalyticsBackend {
+    func logPurchase(value: Double, currency: String, productID: String) {
+        log(
+            name: "purchase",
+            parameters: [
+                "value": value,
+                "currency": currency,
+                "item_id": productID
+            ]
+        )
+    }
 }
 
 // MARK: - Console backend (DEBUG)
@@ -70,6 +85,24 @@ final class FirebaseAnalyticsBackend: AnalyticsBackend {
 
     func setCollectionEnabled(_ enabled: Bool) {
         Analytics.setAnalyticsCollectionEnabled(enabled)
+    }
+
+    func logPurchase(value: Double, currency: String, productID: String) {
+        var parameters: [String: Any] = [
+            AnalyticsParameterValue: value,
+            AnalyticsParameterCurrency: currency,
+            AnalyticsParameterItemID: productID
+        ]
+        parameters[AnalyticsParameterItems] = [
+            [
+                AnalyticsParameterItemID: productID,
+                AnalyticsParameterItemName: "Bunk Planner Pro",
+                AnalyticsParameterItemCategory: "iap",
+                AnalyticsParameterPrice: value,
+                AnalyticsParameterQuantity: 1
+            ]
+        ]
+        Analytics.logEvent(AnalyticsEventPurchase, parameters: parameters)
     }
 }
 #endif

@@ -3,8 +3,8 @@
 //  Student Attendance Predictor
 //
 //  Tracks ad & forecast entitlements from:
-//  - time-limited rewarded ads (24h)
 //  - permanent Pro IAP
+//  - legacy short windows (still honored if already granted)
 //
 
 import Foundation
@@ -14,8 +14,10 @@ import Combine
 final class AdEntitlementsStore: ObservableObject {
     static let shared = AdEntitlementsStore()
 
-    /// Reward duration granted per rewarded-ad view.
-    nonisolated static let rewardDuration: TimeInterval = 24 * 60 * 60
+    /// Hide-ads grant after a rewarded video.
+    nonisolated static let adRemovalDuration: TimeInterval = 4 * 60 * 60
+    /// Forecast unlock grant after a rewarded video.
+    nonisolated static let forecastUnlockDuration: TimeInterval = 2 * 60 * 60
 
     private let defaults: UserDefaults
     private let bannersRemovedUntilKey = "ads.bannersRemovedUntil"
@@ -39,7 +41,12 @@ final class AdEntitlementsStore: ObservableObject {
     /// True while forecast should be unlocked (Pro or active rewarded window).
     var isForecastUnlocked: Bool { isPro || forecastUnlockedUntil > Date() }
 
-    func grantBannerRemoval(for duration: TimeInterval = AdEntitlementsStore.rewardDuration) {
+    /// Free users may hold at most `freeSubjectLimit` subjects. Existing over-limit subjects are kept.
+    func canAddSubject(currentCount: Int) -> Bool {
+        isPro || currentCount < ProPurchaseConfiguration.freeSubjectLimit
+    }
+
+    func grantBannerRemoval(for duration: TimeInterval = AdEntitlementsStore.adRemovalDuration) {
         let until = Date().addingTimeInterval(duration)
         bannersRemovedUntil = until
         defaults.set(until, forKey: bannersRemovedUntilKey)
@@ -48,7 +55,7 @@ final class AdEntitlementsStore: ObservableObject {
         }
     }
 
-    func grantForecastUnlock(for duration: TimeInterval = AdEntitlementsStore.rewardDuration) {
+    func grantForecastUnlock(for duration: TimeInterval = AdEntitlementsStore.forecastUnlockDuration) {
         let until = Date().addingTimeInterval(duration)
         forecastUnlockedUntil = until
         defaults.set(until, forKey: forecastUnlockedUntilKey)

@@ -48,6 +48,18 @@ final class AttendanceViewModel: ObservableObject {
         static let defaultRequiredPercentage = "attendance.defaultRequiredPercentage"
         static let safeCalculationCount = "attendance.safeCalculationCount"
         static let didPromptForReview = "attendance.didPromptForReview"
+        /// Cold/warm process launches — review waits until the 3rd+ session.
+        static let sessionCount = "app.sessionCount"
+    }
+
+    /// Call once per process launch (from ContentView) so review can wait for session 3+.
+    static func recordAppSession(defaults: UserDefaults = .standard) {
+        let next = defaults.integer(forKey: Keys.sessionCount) + 1
+        defaults.set(next, forKey: Keys.sessionCount)
+    }
+
+    static var appSessionCount: Int {
+        UserDefaults.standard.integer(forKey: Keys.sessionCount)
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -121,6 +133,7 @@ final class AttendanceViewModel: ObservableObject {
                 currentPct: Int(result.currentPercentage.rounded()),
                 status: riskStatus
             ))
+            SoftPaywallCoordinator.shared.recordAtRiskWeekIfNeeded(isAtRisk: true)
         }
     }
 
@@ -144,6 +157,14 @@ final class AttendanceViewModel: ObservableObject {
         defaults.set(formattedValue, forKey: Keys.defaultRequiredPercentage)
         requiredPercentageInput = formattedValue
         AnalyticsService.shared.log(.defaultRequiredPercentageSaved(value: Int(boundedValue.rounded())))
+    }
+
+    /// Sets the saved default target without logging a manual save (first-launch market default).
+    func applyDefaultRequiredPercentage(_ value: Double) {
+        let boundedValue = min(max(value, 0), 100)
+        let formattedValue = Self.formattedPercentageString(for: boundedValue)
+        defaults.set(formattedValue, forKey: Keys.defaultRequiredPercentage)
+        requiredPercentageInput = formattedValue
     }
 
     func applyRequiredPercentagePreset(_ value: Double) {
@@ -257,6 +278,8 @@ final class AttendanceViewModel: ObservableObject {
         guard suppressReviewTracking == false else { return }
         guard result.status == .safe else { return }
         guard defaults.bool(forKey: Keys.didPromptForReview) == false else { return }
+        // Apple limits review prompts; wait until the user has opened the app a few times.
+        guard defaults.integer(forKey: Keys.sessionCount) >= 3 else { return }
 
         let signature = "\(input.totalClasses)|\(input.attendedClasses)|\(Self.formattedPercentageString(for: input.requiredPercentage))"
         guard signature != lastSafeCountSignature else { return }
@@ -265,10 +288,9 @@ final class AttendanceViewModel: ObservableObject {
         let nextCount = defaults.integer(forKey: Keys.safeCalculationCount) + 1
         defaults.set(nextCount, forKey: Keys.safeCalculationCount)
 
-        if nextCount >= 3 {
-            defaults.set(true, forKey: Keys.didPromptForReview)
-            reviewRequestToken += 1
-        }
+        // First Safe result on/after session 3 triggers the system review prompt once.
+        defaults.set(true, forKey: Keys.didPromptForReview)
+        reviewRequestToken += 1
     }
 
     private static func sanitizedIntegerInput(_ value: String) -> String {
@@ -317,6 +339,7 @@ final class SubjectStore: ObservableObject {
     }
 
     let calculator: AttendanceViewModel
+    private var lastHabitReminderSignature: String?
 
     var selectedSubjectName: String {
         selectedSubject?.name ?? "Subject"
@@ -419,11 +442,18 @@ final class SubjectStore: ObservableObject {
     }
 
     func hasLoggedToday(for subjectID: UUID? = nil, date: Date = Date()) -> Bool {
-        guard let id = subjectID ?? selectedSubjectID else { return false }
-        return logEntry(subjectID: id, date: date) != nil
+        if let id = subjectID {
+            return logEntry(subjectID: id, date: date) != nil
+        }
+        let targets = subjectsForMarkToday(on: date)
+        guard targets.isEmpty == false else {
+            guard let selected = selectedSubjectID else { return false }
+            return logEntry(subjectID: selected, date: date) != nil
+        }
+        return targets.allSatisfy { logEntry(subjectID: $0.id, date: date) != nil }
     }
 
-    private var selectedSubject: SubjectSummary? {
+    var selectedSubject: SubjectSummary? {
         subjects.first(where: { $0.id == selectedSubjectID })
     }
 
@@ -465,14 +495,43 @@ final class SubjectStore: ObservableObject {
 
     /// Notification setup is deferred so first paint is not blocked on launch.
     func performDeferredLaunchTasks() {
+        applyMarketDefaultAttendanceIfNeeded()
+        SemesterSettings.ensureDefaultDatesIfNeeded()
         Task(priority: .utility) { @MainActor in
             NotificationService.requestAuthorizationIfNeeded()
-            NotificationService.scheduleClassReminder()
-            NotificationService.scheduleWeeklyEngagementReminders()
+            NotificationService.registerPersonalityCategory()
+            NotificationService.scheduleDayTwoMarkNudgeIfNeeded()
+            publishWidgetSnapshot()
         }
     }
 
-    func addSubject(named customName: String? = nil) {
+    /// Reload after Siri, Shortcuts, or Live Activity marks while the app is open.
+    func reloadFromExternalChange() {
+        reloadSubjects()
+        if selectedSubjectID != nil {
+            loadSelectedSubjectIntoCalculator()
+        }
+        publishWidgetSnapshot()
+        rescheduleHabitReminders()
+    }
+
+    /// Applies region-aware default attendance target once on first launch (75 IN / 80 US·UK).
+    private func applyMarketDefaultAttendanceIfNeeded() {
+        let key = "attendance.didApplyMarketDefault"
+        guard defaults.bool(forKey: key) == false else { return }
+        defaults.set(true, forKey: key)
+        let target = StudentMarketStore.current.defaultRequiredAttendance
+        calculator.applyDefaultRequiredPercentage(target)
+    }
+
+    /// Adds a subject when allowed. Returns `false` if Free subject cap blocks the add (Pro bypasses).
+    @discardableResult
+    func addSubject(named customName: String? = nil) -> Bool {
+        guard AdEntitlementsStore.shared.canAddSubject(currentCount: subjects.count) else {
+            AnalyticsService.shared.log(.subjectLimitHit(totalSubjects: subjects.count))
+            return false
+        }
+
         let entity = SubjectEntity(context: context)
         entity.id = UUID()
         entity.name = validatedSubjectName(customName) ?? nextSubjectName()
@@ -488,6 +547,8 @@ final class SubjectStore: ObservableObject {
         selectedSubjectID = entity.id
         AnalyticsService.shared.log(.subjectAdded(totalSubjects: subjects.count))
         AnalyticsUserProfile.sync(subjectStore: self)
+        GuidedSetupStore.shared.subjectWasAdded()
+        return true
     }
 
     func deleteSubjects(at offsets: IndexSet) {
@@ -534,6 +595,7 @@ final class SubjectStore: ObservableObject {
         guard selectedSubjectID != subject.id else { return }
         selectedSubjectID = subject.id
         AnalyticsService.shared.log(.subjectSelected)
+        publishWidgetSnapshot()
     }
 
     func selectSubject(id: UUID) {
@@ -541,6 +603,7 @@ final class SubjectStore: ObservableObject {
         guard selectedSubjectID != id else { return }
         selectedSubjectID = id
         AnalyticsService.shared.log(.subjectSelected)
+        publishWidgetSnapshot()
     }
 
     func renameSubject(id: UUID, to name: String) {
@@ -556,6 +619,7 @@ final class SubjectStore: ObservableObject {
         saveContext()
         reloadSubjects()
         AnalyticsService.shared.log(.subjectRenamed)
+        publishWidgetSnapshot()
     }
 
     func weeklySchedule(for subjectID: UUID) -> WeeklySchedule {
@@ -689,11 +753,117 @@ final class SubjectStore: ObservableObject {
         return subject.weeklySchedule.classes(on: date)
     }
 
+    /// Subjects with timetable classes on `date`. Falls back to all subjects when none are scheduled.
+    func subjectsForMarkToday(on date: Date = Date()) -> [SubjectSummary] {
+        let scheduled = subjects.filter { classesScheduledToday(for: $0.id, on: date) > 0 }
+        if scheduled.isEmpty == false {
+            return scheduled.sorted {
+                $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            }
+        }
+        return subjects.sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+    }
+
+    /// Classes left this semester for a subject (timetable × weeks − holidays − planned bunks).
+    func classesLeftThisSemester(
+        for subject: SubjectSummary,
+        weeks: Int = SemesterSettings.weeksRemaining(),
+        holidayClassCount: Int = ForecastAssumptions.holidayClassCount,
+        plannedBunks: Int = ForecastAssumptions.plannedBunks,
+        fallbackClassesPerWeek: Int = ForecastAssumptions.fallbackClassesPerWeek
+    ) -> Int {
+        let hasTimetable = subject.weeklySchedule.totalPerWeek > 0
+        return CalculationService.classesLeftThisSemester(
+            schedule: subject.weeklySchedule,
+            weeks: weeks,
+            holidayClassCount: holidayClassCount,
+            plannedBunks: plannedBunks,
+            fallbackClassesPerWeek: hasTimetable ? 0 : fallbackClassesPerWeek
+        )
+    }
+
+    func publishWidgetSnapshot() {
+        WidgetSnapshotStore.publish(from: subjects, selectedID: selectedSubjectID)
+        rescheduleHabitReminders()
+    }
+
+    /// Repeating local reminders freeze copy at schedule time — refresh after data changes.
+    func rescheduleHabitReminders(force: Bool = false) {
+        let context = makeNotificationContext()
+        if force == false, context.schedulingSignature == lastHabitReminderSignature {
+            return
+        }
+        lastHabitReminderSignature = context.schedulingSignature
+        NotificationService.reschedulePersonalityReminders(context: context)
+    }
+
+    func makeNotificationContext(focus: SubjectSummary? = nil) -> NotificationContext {
+        let market = StudentMarketStore.current
+        let subject = focus ?? selectedSubject
+        let calendar = Calendar.current
+        let today = Date()
+        let summary = weeklyAttendanceSummary(referenceDate: today)
+        var classesByWeekday: [Int: Int] = [:]
+        for weekday in 1...7 {
+            classesByWeekday[weekday] = subjects.reduce(0) { total, subject in
+                total + classesOnWeekday(subject.weeklySchedule, weekday: weekday)
+            }
+        }
+        let points = selectedSubjectID.map { AttendanceTrendStore.load(subjectID: $0) } ?? []
+        let trend: AttendanceTrendDirection
+        if points.count >= 2 {
+            let delta = points[points.count - 1].percentage - points[points.count - 2].percentage
+            if delta > 0.3 {
+                trend = .improving
+            } else if delta < -0.3 {
+                trend = .declining
+            } else {
+                trend = .stable
+            }
+        } else {
+            trend = .stable
+        }
+
+        let hasData = (subject?.totalClasses ?? 0) > 0
+        return NotificationContext(
+            attendancePercentage: subject?.currentPercentage ?? 0,
+            requiredPercentage: subject?.requiredPercentage ?? calculator.defaultRequiredPercentage,
+            safeBunks: subject?.status == .safe ? (subject?.bunkAllowed ?? 0) : 0,
+            recoveryNeeded: subject?.status == .risk ? (subject?.recoveryNeeded ?? 0) : 0,
+            subjectName: subject?.name ?? "Bunk Planner",
+            skipVerb: market.skipVerb,
+            skipNoun: market.skipNounPlural,
+            classesToday: subjects.reduce(0) { $0 + classesScheduledToday(for: $1.id, on: today) },
+            hasData: hasData,
+            isSafe: (subject?.status ?? .safe) == .safe,
+            hasLoggedToday: hasLoggedToday(date: today),
+            isWeekend: calendar.isDateInWeekend(today),
+            isWeeklyHoliday: AttendanceCalendar.isWeeklyHoliday(today, calendar: calendar),
+            streakDays: attendanceStreakDays(referenceDate: today),
+            trend: trend,
+            weeklyMissed: summary.missedClasses,
+            weeklyAttended: summary.attendedClasses,
+            atRiskSubjects: dashboardSummary.riskSubjects,
+            dayKey: NotificationCooldownStore.dayKey(today, calendar: calendar),
+            classesByWeekday: classesByWeekday
+        )
+    }
+
     /// The saved log entry for a subject on a specific day, if any.
     func logEntry(subjectID: UUID, date: Date) -> AttendanceLogEntry? {
         let day = Calendar.current.startOfDay(for: date)
         guard let entity = fetchRecordEntity(subjectID: subjectID, day: day) else { return nil }
         return logEntry(from: entity)
+    }
+
+    /// Every saved log entry across all subjects, oldest first.
+    func allLogEntries() -> [AttendanceLogEntry] {
+        let request = AttendanceRecordEntity.fetchRequest()
+        request.sortDescriptors = [NSSortDescriptor(key: "date", ascending: true)]
+        let fetched = (try? context.fetch(request)) ?? []
+        return fetched.map(logEntry(from:))
     }
 
     /// All log entries for a subject within the month containing `month`.
@@ -793,21 +963,16 @@ final class SubjectStore: ObservableObject {
             source: source
         ))
         AnalyticsUserProfile.recordDayMarked(source: source)
-
-        if source == "mark_today" || source == "day_editor" {
-            let markChanged: Bool
-            if let previousEntry {
-                markChanged = previousEntry.scheduledClasses != boundedScheduled
-                    || previousEntry.attendedClasses != boundedAttended
-                    || previousEntry.isHoliday != isHoliday
-            } else {
-                markChanged = true
-            }
-            if markChanged {
-                AdMobInterstitialService.shared.tryShowAfterDayMarked()
-            }
-        }
         AnalyticsUserProfile.sync(subjectStore: self)
+
+        SoftPaywallCoordinator.shared.recordAtRiskWeekIfNeeded(
+            isAtRisk: dashboardSummary.riskSubjects > 0
+        )
+        if source == "mark_today" {
+            SoftPaywallCoordinator.shared.evaluateAfterDayMarked(
+                streak: attendanceStreakDays()
+            )
+        }
     }
 
     /// Removes a day's mark and reverses its contribution to the counters.
@@ -855,6 +1020,7 @@ final class SubjectStore: ObservableObject {
             attendedClasses: Int(subjectEntity.attendedClasses),
             requiredPercentage: subjectEntity.requiredPercentage
         )
+        publishWidgetSnapshot()
     }
 
     private func fetchRecordEntity(subjectID: UUID, day: Date) -> AttendanceRecordEntity? {
@@ -878,6 +1044,19 @@ final class SubjectStore: ObservableObject {
             isHoliday: entity.isHoliday,
             updatedAt: entity.updatedAt
         )
+    }
+
+    private func classesOnWeekday(_ schedule: WeeklySchedule, weekday: Int) -> Int {
+        switch weekday {
+        case 1: return schedule.sunday
+        case 2: return schedule.monday
+        case 3: return schedule.tuesday
+        case 4: return schedule.wednesday
+        case 5: return schedule.thursday
+        case 6: return schedule.friday
+        case 7: return schedule.saturday
+        default: return 0
+        }
     }
 
     private func bindCalculatorChanges() {
@@ -946,6 +1125,7 @@ final class SubjectStore: ObservableObject {
             attendedClasses: attendedClasses,
             requiredPercentage: requiredPercentage
         )
+        publishWidgetSnapshot()
     }
 
     private func loadSelectedSubjectIntoCalculator() {
@@ -1069,23 +1249,15 @@ final class SubjectStore: ObservableObject {
         )
         let status: AttendanceStatus = currentPercentage >= requiredPercentage ? .safe : .risk
 
-        if status == .risk {
-            NotificationService.scheduleRiskAlert(
-                subjectName: subjectName,
-                currentPercentage: currentPercentage,
-                recoveryNeeded: recoveryNeeded
-            )
-            NotificationService.scheduleRecoveryDeadlineAlert(
-                subjectName: subjectName,
-                recoveryNeeded: recoveryNeeded
-            )
-        } else {
-            NotificationService.scheduleLowBufferAlert(
-                subjectName: subjectName,
-                currentPercentage: currentPercentage,
-                bunkAllowed: bunkAllowed
-            )
-        }
+        var context = makeNotificationContext()
+        context.subjectName = subjectName
+        context.attendancePercentage = currentPercentage
+        context.requiredPercentage = requiredPercentage
+        context.safeBunks = status == .safe ? bunkAllowed : 0
+        context.recoveryNeeded = status == .risk ? recoveryNeeded : 0
+        context.isSafe = status == .safe
+        context.hasData = totalClasses > 0
+        NotificationService.scheduleImmediatePersonalityAlert(context: context)
     }
 
     private func recordTrendIfNeeded(

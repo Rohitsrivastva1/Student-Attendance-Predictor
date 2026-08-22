@@ -96,20 +96,36 @@ final class DeadlineStore: ObservableObject {
             .sorted { $0.dueDate > $1.dueDate }
     }
 
+    /// Upcoming exams/assignments within the next `days` days (inclusive).
+    func upcomingWithin(days: Int) -> [AcademicDeadline] {
+        upcoming.filter { $0.daysRemaining <= days }
+    }
+
     func add(_ deadline: AcademicDeadline) {
         deadlines.append(deadline)
         persist()
+        rescheduleNotifications()
+        AnalyticsService.shared.log(.academicDeadlineAdded(kind: deadline.kind.rawValue))
     }
 
     func update(_ deadline: AcademicDeadline) {
         guard let index = deadlines.firstIndex(where: { $0.id == deadline.id }) else { return }
         deadlines[index] = deadline
         persist()
+        rescheduleNotifications()
+        AnalyticsService.shared.log(.academicDeadlineUpdated)
     }
 
     func delete(id: UUID) {
         deadlines.removeAll { $0.id == id }
         persist()
+        rescheduleNotifications()
+        AnalyticsService.shared.log(.academicDeadlineDeleted)
+    }
+
+    /// Refresh all deadline local notifications (T-7, T-3, T-1, morning of due day).
+    func rescheduleNotifications() {
+        NotificationService.rescheduleDeadlineReminders(deadlines: deadlines)
     }
 
     private func load() {
@@ -119,6 +135,7 @@ final class DeadlineStore: ObservableObject {
             return
         }
         deadlines = decoded
+        rescheduleNotifications()
     }
 
     private func persist() {
