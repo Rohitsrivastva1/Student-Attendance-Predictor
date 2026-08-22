@@ -186,6 +186,8 @@ enum AnalyticsEvent {
     case studentProfileUpdated(source: String)
     case schoolabeSyncSucceeded(subjectCount: Int)
     case schoolabeSyncFailed(reason: String)
+    case schoolabeUserDataDeleted
+    case userDataRemoveFailed(reason: String)
     case softPaywallTriggered(source: String)
 
     // MARK: Settings & misc
@@ -356,6 +358,8 @@ extension AnalyticsEvent {
         case .studentProfileUpdated: return "student_profile_updated"
         case .schoolabeSyncSucceeded: return "schoolabe_sync_succeeded"
         case .schoolabeSyncFailed: return "schoolabe_sync_failed"
+        case .schoolabeUserDataDeleted: return "schoolabe_user_data_deleted"
+        case .userDataRemoveFailed: return "user_data_remove_failed"
         case .softPaywallTriggered: return "soft_paywall_triggered"
 
         case .rateUsTapped: return "rate_us_tapped"
@@ -477,6 +481,12 @@ extension AnalyticsEvent {
             return ["subject_count": subjectCount]
 
         case let .schoolabeSyncFailed(reason):
+            return ["reason": String(reason.prefix(80))]
+
+        case .schoolabeUserDataDeleted:
+            return [:]
+
+        case let .userDataRemoveFailed(reason):
             return ["reason": String(reason.prefix(80))]
 
         case let .softPaywallTriggered(source):

@@ -91,8 +91,6 @@ struct OnboardingProfileView: View {
 
                         ageSection
                     }
-
-                    privacyNote
                 }
                 .padding(.horizontal, 24)
                 .padding(.top, 4)
@@ -222,43 +220,38 @@ struct OnboardingProfileView: View {
 
     private var studyLevelSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            fieldLabel(title: "Class or degree", icon: "book.fill", isValid: trimmedClass.isEmpty == false)
-
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 108), spacing: 8)], spacing: 8) {
-                ForEach(StudyLevelChip.allCases) { chip in
-                    let selected = classOrDegree == chip.rawValue
-                    Button {
-                        classOrDegree = chip.rawValue
-                        focusedField = .institution
-                    } label: {
-                        Text(chip.rawValue)
-                            .font(.system(size: 13, weight: .bold, design: .rounded))
-                            .foregroundStyle(selected ? .black : .white.opacity(0.9))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 11)
-                            .background(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(selected ? cyan : Color.white.opacity(0.08))
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                            .stroke(selected ? cyan : Color.white.opacity(0.12), lineWidth: 1)
-                                    )
-                            )
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-
             profileField(
-                title: "Or type yours",
-                icon: "pencil",
-                isValid: trimmedClass.isEmpty == false,
-                compactLabel: true
+                title: "Class / degree",
+                icon: "book.fill",
+                isValid: trimmedClass.isEmpty == false
             ) {
                 TextField("e.g. B.Tech 2nd year", text: $classOrDegree)
                     .focused($focusedField, equals: .classOrDegree)
                     .submitLabel(.next)
                     .onSubmit { focusedField = .institution }
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(StudyLevelChip.allCases) { chip in
+                        let selected = classOrDegree == chip.rawValue
+                        Button {
+                            classOrDegree = chip.rawValue
+                            focusedField = .institution
+                        } label: {
+                            Text(chip.rawValue)
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
+                                .foregroundStyle(selected ? .black : .white.opacity(0.85))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(
+                                    Capsule(style: .continuous)
+                                        .fill(selected ? cyan : Color.white.opacity(0.08))
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
             }
         }
     }
@@ -288,22 +281,6 @@ struct OnboardingProfileView: View {
                 }
             }
         }
-    }
-
-    private var privacyNote: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "lock.shield.fill")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(mint.opacity(0.9))
-            Text("Attendance marks stay on your device. We only save this profile and your subject names to improve Bunk Planner.")
-                .font(.system(size: 12, weight: .medium, design: .rounded))
-                .foregroundStyle(.white.opacity(0.5))
-        }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.white.opacity(0.04))
-        )
     }
 
     private var continueButton: some View {
@@ -376,7 +353,7 @@ struct OnboardingProfileView: View {
 
     private func focusedFieldMatches(title: String, icon: String) -> Bool {
         switch (title, focusedField) {
-        case ("What should we call you?", .name), ("Or type yours", .classOrDegree), ("Where do you study?", .institution):
+        case ("What should we call you?", .name), ("Class / degree", .classOrDegree), ("Where do you study?", .institution):
             return true
         default:
             return false

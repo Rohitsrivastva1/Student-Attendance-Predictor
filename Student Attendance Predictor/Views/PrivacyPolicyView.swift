@@ -18,7 +18,12 @@ struct PrivacyPolicyView: View {
 
                 section(
                     title: "Profile sync",
-                    body: "When you complete onboarding or update About you in Settings, Bunk Planner sends your name, optional age, class or degree, school or college name, and the list of subject names you create to Schoolabe (info@schoolabe.com). We do not upload your daily attendance marks, bunk counts, or CGPA through this sync."
+                    body: "When you complete onboarding or update About you in Settings, Bunk Planner sends your name, optional age, class or degree, school or college name, and the list of subject names you create to Schoolabe (info@schoolabe.com) to improve the app. We do not upload your daily attendance marks, bunk counts, or CGPA."
+                )
+
+                section(
+                    title: "Remove your data",
+                    body: "Settings → About you → Remove my data clears your profile on this device and sets a removal flag on Schoolabe for tracking. Your attendance history on this phone is not deleted."
                 )
 
                 section(

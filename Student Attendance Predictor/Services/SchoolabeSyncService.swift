@@ -62,6 +62,7 @@ enum SchoolabeSyncError: Error, LocalizedError {
     case offline
     case httpStatus(Int)
     case encodingFailed
+    case deleteFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -69,7 +70,16 @@ enum SchoolabeSyncError: Error, LocalizedError {
         case .offline: return "No network connection."
         case let .httpStatus(code): return "Schoolabe API returned HTTP \(code)."
         case .encodingFailed: return "Could not encode sync payload."
+        case let .deleteFailed(message): return message
         }
+    }
+}
+
+private struct SchoolabeDeleteUserDataPayload: Encodable {
+    let clientUserId: String
+
+    enum CodingKeys: String, CodingKey {
+        case clientUserId = "client_user_id"
     }
 }
 
@@ -142,6 +152,37 @@ final class SchoolabeSyncService {
         } catch {
             AnalyticsService.shared.log(.schoolabeSyncFailed(reason: String(describing: error).prefix(80).description))
         }
+    }
+
+    /// Removes profile + synced subjects from Schoolabe for this anonymous client id.
+    func deleteUserData() async throws {
+        guard SchoolabeAPIConfiguration.isConfigured,
+              let url = SchoolabeAPIConfiguration.deleteUserDataURL else {
+            throw SchoolabeSyncError.invalidURL
+        }
+
+        let payload = SchoolabeDeleteUserDataPayload(
+            clientUserId: AnalyticsService.shared.userId
+        )
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("BunkPlanner/iOS", forHTTPHeaderField: "User-Agent")
+        request.timeoutInterval = 20
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let body = try? encoder.encode(payload) else {
+            throw SchoolabeSyncError.encodingFailed
+        }
+        request.httpBody = body
+
+        let (_, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw SchoolabeSyncError.offline }
+        guard (200...299).contains(http.statusCode) else {
+            throw SchoolabeSyncError.httpStatus(http.statusCode)
+        }
+        AnalyticsService.shared.log(.schoolabeUserDataDeleted)
     }
 
     private func post(_ payload: SchoolabeSyncPayload, to url: URL) async throws {

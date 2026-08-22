@@ -19,6 +19,9 @@ struct SettingsSheetView: View {
     @State private var showAdPrivacyChoices = false
     @State private var isShowingProPaywall = false
     @State private var isShowingProfileEditor = false
+    @State private var showRemoveUserDataConfirmation = false
+    @State private var isRemovingUserData = false
+    @State private var removeUserDataErrorMessage: String?
     #if DEBUG
     @State private var isShowingDebugTools = false
     #endif
@@ -150,9 +153,23 @@ struct SettingsSheetView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
-                    Text("Optional name, class, and college — synced to Schoolabe if you save. Attendance numbers stay on device.")
+
+                    Text("Used to improve Bunk Planner — name, class, college, and subject names you create.")
                         .font(.system(size: 12, weight: .medium, design: .rounded))
                         .foregroundStyle(.secondary)
+
+                    Button(role: .destructive) {
+                        showRemoveUserDataConfirmation = true
+                    } label: {
+                        HStack {
+                            Label("Remove my data", systemImage: "trash")
+                            Spacer()
+                            if isRemovingUserData {
+                                ProgressView()
+                            }
+                        }
+                    }
+                    .disabled(isRemovingUserData)
                 }
 
                 Section("Defaults") {
@@ -378,6 +395,26 @@ struct SettingsSheetView: View {
             } message: {
                 Text(adPrivacyErrorMessage ?? "")
             }
+            .alert("Remove my data?", isPresented: $showRemoveUserDataConfirmation) {
+                Button("Remove", role: .destructive) {
+                    Task { await removeUserDataFromSchoolabe() }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Clears your profile on this device and tells Schoolabe to mark your synced data as removed. Your attendance marks on this phone stay.")
+            }
+            .alert("Could not remove data", isPresented: Binding(
+                get: { removeUserDataErrorMessage != nil },
+                set: { isPresented in
+                    if isPresented == false {
+                        removeUserDataErrorMessage = nil
+                    }
+                }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(removeUserDataErrorMessage ?? "")
+            }
             .alert("Unable to Open App Store", isPresented: Binding(
                 get: { rateErrorMessage != nil },
                 set: { isPresented in
@@ -452,6 +489,21 @@ struct SettingsSheetView: View {
             } catch {
                 adPrivacyErrorMessage = error.localizedDescription
             }
+        }
+    }
+
+    private func removeUserDataFromSchoolabe() async {
+        guard isRemovingUserData == false else { return }
+        isRemovingUserData = true
+        defer { isRemovingUserData = false }
+
+        do {
+            try await SchoolabeSyncService.shared.deleteUserData()
+            StudentProfileStore.shared.clearLocalProfile()
+            subjectStore.rescheduleHabitReminders(force: true)
+        } catch {
+            removeUserDataErrorMessage = error.localizedDescription
+            AnalyticsService.shared.log(.userDataRemoveFailed(reason: String(describing: error).prefix(80).description))
         }
     }
 

@@ -17,4 +17,9 @@ enum SchoolabeAPIConfiguration {
     }
 
     static var isConfigured: Bool { syncURL != nil }
+
+    static var deleteUserDataURL: URL? {
+        guard let sync = syncURL else { return nil }
+        return sync.deletingLastPathComponent().appendingPathComponent("user-data")
+    }
 }

@@ -58,4 +58,15 @@ final class StudentProfileStore: ObservableObject {
     func update(_ profile: StudentProfile) {
         save(profile, skipped: false)
     }
+
+    func clearLocalProfile() {
+        profile = .empty
+        didSkipProfile = false
+        defaults.removeObject(forKey: Keys.profileJSON)
+        defaults.set(false, forKey: Keys.didSkip)
+        AnalyticsService.shared.setUserProperty(nil, forName: "student_profile_status")
+        AnalyticsService.shared.setUserProperty(nil, forName: "student_name_initial")
+        AnalyticsService.shared.setUserProperty(nil, forName: "student_class")
+        NotificationCenter.default.post(name: .studentProfileDidUpdate, object: nil)
+    }
 }

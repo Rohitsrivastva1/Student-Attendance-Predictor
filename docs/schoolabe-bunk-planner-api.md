@@ -68,6 +68,38 @@ Single endpoint for the iOS app to upsert an anonymous user profile and their su
 
 ---
 
+## `DELETE /api/v1/bunk-planner/user-data`
+
+Marks the user as deleted for tracking — **does not remove rows** from the database.
+
+### Request body
+
+```json
+{
+  "client_user_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+### Response
+
+**200**
+
+```json
+{
+  "ok": true,
+  "data_deleted": true,
+  "client_user_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+Server sets `data_deleted = true` and `data_deleted_at` on `bunk_planner_users`. Profile and subject rows are kept for analytics. A new sync from the app clears the flag.
+
+### App trigger
+
+Settings → About you → **Remove my data** — calls API, then clears local profile on device.
+
+---
+
 ## Server implementation notes
 
 1. **Upsert** on `client_user_id` (primary key).
