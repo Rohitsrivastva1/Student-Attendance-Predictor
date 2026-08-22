@@ -59,6 +59,17 @@ struct ContentView: View {
                 AdMobAppOpenService.shared.showAdIfAvailable()
             }
         }
+        .onChange(of: showOnboarding) { _, isShowing in
+            guard isShowing == false, let store = subjectStore else { return }
+            GuidedSetupStore.shared.refreshAfterOnboarding(
+                subjectCount: store.subjects.count,
+                hasMarked: GuidedSetupStore.hasUserMarked(
+                    subjectCount: store.subjects.count,
+                    hasAnalyticsMark: AnalyticsService.shared.hasMarkedAtLeastOnce,
+                    hasLegacyAttendance: store.subjects.contains(where: { $0.totalClasses > 0 })
+                )
+            )
+        }
         .onReceive(NotificationCenter.default.publisher(for: .attendanceDataChanged)) { _ in
             subjectStore?.reloadFromExternalChange()
         }
@@ -78,6 +89,7 @@ struct ContentView: View {
 
         if store.subjects.contains(where: { $0.totalClasses > 0 }) {
             defaults.set(true, forKey: key)
+            GuidedSetupStore.shared.markCompleteSilently()
             showOnboarding = false
             AnalyticsService.shared.log(.onboardingSkipped(reason: "returning_data"))
             return

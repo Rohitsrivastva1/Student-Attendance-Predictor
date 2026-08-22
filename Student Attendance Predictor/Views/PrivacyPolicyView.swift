@@ -13,7 +13,12 @@ struct PrivacyPolicyView: View {
             VStack(alignment: .leading, spacing: 14) {
                 section(
                     title: "Overview",
-                    body: "Bunk Planner helps you plan attendance and bunk safely. Your subject names, attendance numbers, and forecasts are stored on your device. SchoolAbe does not operate a server that receives your attendance records."
+                    body: "Bunk Planner helps you plan attendance and bunk safely. Your attendance marks and forecasts stay on your device. During setup we ask for your name, class, and school or college — that profile and your subject names may be sent to Schoolabe as described below."
+                )
+
+                section(
+                    title: "Profile sync",
+                    body: "When you complete onboarding or update About you in Settings, Bunk Planner sends your name, optional age, class or degree, school or college name, and the list of subject names you create to Schoolabe (info@schoolabe.com). We do not upload your daily attendance marks, bunk counts, or CGPA through this sync."
                 )
 
                 section(

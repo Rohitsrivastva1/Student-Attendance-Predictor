@@ -48,8 +48,16 @@ struct HomeView: View {
     @State private var isExportingPDF = false
     @State private var exportErrorMessage: String?
     @State private var skipPlannerDay: Date?
-    @State private var showWidgetPrompt = false
     @State private var highlightMarkToday = false
+    @State private var showPostMarkFocusPrompt = false
+    @State private var focusPromptSubject: SubjectSummary?
+    @State private var showFocusTimerSheet = false
+    @State private var dismissAtRiskSharePrompt = false
+    @State private var pendingToolsDeadlines = false
+    #if DEBUG
+    @State private var isShowingDebugTools = false
+    #endif
+    @ObservedObject private var widgetPrompt = WidgetPromptCoordinator.shared
     @ObservedObject private var guidedSetup = GuidedSetupStore.shared
     @ObservedObject private var notificationRoute = NotificationRouteStore.shared
 
@@ -202,6 +210,17 @@ struct HomeView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
+                #if DEBUG
+                Button {
+                    triggerLightHaptic()
+                    isShowingDebugTools = true
+                } label: {
+                    Image(systemName: "ladybug.fill")
+                        .foregroundStyle(Color.orange)
+                }
+                .accessibilityLabel("Debug tools")
+                #endif
+
                 Button {
                     triggerLightHaptic()
                     isShowingSubjects = true
@@ -236,29 +255,94 @@ struct HomeView: View {
                 requestAppReview()
             }
         }
-        .alert("Add a Home Screen widget?", isPresented: $showWidgetPrompt) {
-            Button("Got it", role: .cancel) {}
+        .alert("Add a Home Screen widget?", isPresented: Binding(
+            get: { widgetPrompt.shouldPresent },
+            set: { if $0 == false { widgetPrompt.clear() } }
+        )) {
+            Button("Got it", role: .cancel) { widgetPrompt.clear() }
         } message: {
             Text("Long-press your Home Screen → tap + → search Bunk Planner to see attendance and safe bunks at a glance.")
         }
+        .confirmationDialog(
+            focusPromptTitle,
+            isPresented: $showPostMarkFocusPrompt,
+            titleVisibility: .visible
+        ) {
+            Button("Focus 25 min") {
+                startFocusAfterMark(minutes: 25)
+            }
+            Button("Focus 15 min") {
+                startFocusAfterMark(minutes: 15)
+            }
+            Button("Not now", role: .cancel) {
+                AnalyticsService.shared.log(.postMarkFocusPromptDismissed)
+            }
+        } message: {
+            Text("Stay in Bunk Planner — timer tags your subject automatically.")
+        }
+        .sheet(isPresented: $showFocusTimerSheet) {
+            NavigationStack {
+                FocusTimerToolScreen(subjects: subjectStore.subjects)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("Done") { showFocusTimerSheet = false }
+                                .foregroundStyle(.white)
+                        }
+                    }
+            }
+            .preferredColorScheme(.dark)
+        }
+        #if DEBUG
+        .sheet(isPresented: $isShowingDebugTools) {
+            DebugToolsView()
+        }
+        #endif
     }
 
     private func refreshGuidedSetup() {
+        let legacyAttendance = subjectStore.subjects.contains(where: { $0.totalClasses > 0 })
         guidedSetup.refresh(
             subjectCount: subjectStore.subjects.count,
-            hasMarked: AnalyticsService.shared.hasMarkedAtLeastOnce
+            hasMarked: GuidedSetupStore.hasUserMarked(
+                subjectCount: subjectStore.subjects.count,
+                hasAnalyticsMark: AnalyticsService.shared.hasMarkedAtLeastOnce,
+                hasLegacyAttendance: legacyAttendance
+            )
         )
     }
 
-    private func maybeShowWidgetPrompt() {
-        let key = "prompt.widgetAfterFirstMark"
-        guard UserDefaults.standard.bool(forKey: key) == false else { return }
-        guard AnalyticsService.shared.hasMarkedAtLeastOnce else { return }
-        UserDefaults.standard.set(true, forKey: key)
-        AnalyticsService.shared.log(.widgetPromptShown)
-        showWidgetPrompt = true
+    private var focusPromptTitle: String {
+        if let name = focusPromptSubject?.name {
+            return "Focus on \(name)?"
+        }
+        return "Quick focus session?"
     }
-    
+
+    private func startFocusAfterMark(minutes: Int) {
+        let timer = FocusTimerService.shared
+        if let subject = focusPromptSubject {
+            timer.tagSubject(id: subject.id, name: subject.name)
+        }
+        timer.selectedFocusMinutes = minutes
+        timer.clampToEntitlement(isPro: entitlements.isPro)
+        AnalyticsService.shared.log(.postMarkFocusPromptAccepted(minutes: minutes))
+        MultiFeatureEngagementStore.record(.focus)
+        showFocusTimerSheet = true
+    }
+
+    private func handleAllSubjectsMarkedToday(_ subject: SubjectSummary?) {
+        focusPromptSubject = subject
+        let dayKey = NotificationCooldownStore.dayKey(Date())
+        let key = "prompt.postMarkFocus.\(dayKey)"
+        guard UserDefaults.standard.bool(forKey: key) == false else { return }
+        guard FocusTimerService.shared.phase == .idle else { return }
+        if let subject {
+            AnalyticsService.shared.log(.postMarkFocusPromptShown(subjectName: subject.name))
+        }
+        showPostMarkFocusPrompt = true
+        UserDefaults.standard.set(true, forKey: key)
+    }
+
     @ViewBuilder
     private var mainNavigationContent: some View {
         if isRegularWidth {
@@ -406,7 +490,8 @@ struct HomeView: View {
                 ToolsView(
                     subjectStore: subjectStore,
                     gpaStore: gpaStore,
-                    deadlineStore: deadlineStore
+                    deadlineStore: deadlineStore,
+                    navigateToDeadlines: $pendingToolsDeadlines
                 )
                     .padding(.horizontal, 20)
                     .padding(.vertical, 24)
@@ -445,7 +530,9 @@ struct HomeView: View {
                         }
                         if let step = guidedSetup.activeStep {
                             GuidedSetupBanner(step: step) {
-                                guidedSetup.complete()
+                                guidedSetup.dismiss(step: step)
+                            } onAction: {
+                                handleGuidedSetupAction(step)
                             }
                         }
                         subjectPickerChip
@@ -455,11 +542,17 @@ struct HomeView: View {
                             isHighlighted: highlightMarkToday,
                             onCelebrated: {
                                 refreshGuidedSetup()
-                                maybeShowWidgetPrompt()
+                            },
+                            onAllSubjectsMarkedToday: { subject in
+                                handleAllSubjectsMarkedToday(subject)
                             },
                             onAddSubject: { isShowingSubjects = true }
                         )
                         .id("markTodayCard")
+
+                        homeRotatingPromoCard
+
+                        atRiskSharePromptCard
 
                         upcomingExamAttendanceWarning
 
@@ -545,32 +638,59 @@ struct HomeView: View {
         }
     }
     
+    private func handleGuidedSetupAction(_ step: GuidedSetupStep) {
+        switch step {
+        case .addSubject:
+            isShowingSubjects = true
+        case .markToday:
+            highlightMarkToday = true
+        }
+    }
+
+    private func openExamDeadlinesFromWarning() {
+        triggerLightHaptic()
+        AnalyticsService.shared.log(.academicExamAttendanceWarningTapped)
+        selectedTab = .tools
+        pendingToolsDeadlines = true
+    }
+
     private var upcomingExamAttendanceWarning: some View {
         Group {
             if let warning = nearestExamAttendanceWarning {
-                HStack(alignment: .top, spacing: 12) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(Color.orange)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(warning.title)
-                            .font(.system(size: 14, weight: .heavy, design: .rounded))
-                            .foregroundStyle(.white)
-                        Text(warning.body)
-                            .font(.system(size: 12, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.7))
+                Button(action: openExamDeadlinesFromWarning) {
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(Color.orange)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(warning.title)
+                                .font(.system(size: 14, weight: .heavy, design: .rounded))
+                                .foregroundStyle(.white)
+                            Text(warning.body)
+                                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.7))
+                            Text("View in Exam Deadlines →")
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
+                                .foregroundStyle(Color.orange.opacity(0.95))
+                                .padding(.top, 2)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.45))
+                            .padding(.top, 2)
                     }
-                    Spacer(minLength: 0)
+                    .padding(14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Color.orange.opacity(0.12))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .stroke(Color.orange.opacity(0.35), lineWidth: 1)
+                            )
+                    )
                 }
-                .padding(14)
-                .background(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(Color.orange.opacity(0.12))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .stroke(Color.orange.opacity(0.35), lineWidth: 1)
-                        )
-                )
+                .buttonStyle(PressableButtonStyle())
                 .onAppear {
                     AnalyticsService.shared.log(.academicExamAttendanceWarningShown)
                 }
@@ -1655,6 +1775,7 @@ struct HomeView: View {
         )
         .onAppear {
             AnalyticsService.shared.log(.lockedForecastViewed)
+            MultiFeatureEngagementStore.record(.forecast)
             AnalyticsService.shared.logProCtaShownOnce(surface: "locked_forecast")
         }
     }
@@ -3675,6 +3796,101 @@ struct HomeView: View {
         return isCriticalRisk(result: result) ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill"
     }
 
+    private var homeRotatingPromoCard: some View {
+        let promo = HomePromoStore.promoForCurrentWeek()
+        return HomePromoCard(
+            promo: promo,
+            market: studentMarket,
+            onAction: { handleHomePromoTap(promo) }
+        )
+        .onAppear {
+            AnalyticsService.shared.log(.homePromoCardShown(kind: promo.rawValue))
+        }
+    }
+
+    private func handleHomePromoTap(_ promo: HomePromoKind) {
+        triggerLightHaptic()
+        switch promo {
+        case .skipPlanner:
+            AnalyticsService.shared.log(.homePromoCardTapped(kind: promo.rawValue, action: "skip_planner"))
+            skipPlannerDay = Calendar.current.startOfDay(for: Date())
+            MultiFeatureEngagementStore.record(.skipPlanner)
+            AnalyticsService.shared.log(.skipPlannerViewed(dayCount: subjectStore.subjectsForMarkToday(on: Date()).count))
+        case .focus:
+            AnalyticsService.shared.log(.homePromoCardTapped(kind: promo.rawValue, action: "focus"))
+            if let subject = subjectStore.selectedSubject {
+                FocusTimerService.shared.tagSubject(id: subject.id, name: subject.name)
+            }
+            MultiFeatureEngagementStore.record(.focus)
+            showFocusTimerSheet = true
+        case .export:
+            AnalyticsService.shared.log(.homePromoCardTapped(kind: promo.rawValue, action: "export"))
+            selectedTab = .tools
+        case .widget:
+            AnalyticsService.shared.log(.homePromoCardTapped(kind: promo.rawValue, action: "widget"))
+            widgetPrompt.presentInstructions()
+            MultiFeatureEngagementStore.record(.widget)
+        }
+    }
+
+    @ViewBuilder
+    private var atRiskSharePromptCard: some View {
+        if dismissAtRiskSharePrompt == false,
+           let result = viewModel.result,
+           result.status == .risk,
+           hasAttendanceData {
+            let weekKey = SoftPaywallCoordinator.currentISOWeekKey()
+            let dismissKey = "prompt.atRiskShare.\(weekKey)"
+            if UserDefaults.standard.bool(forKey: dismissKey) == false {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Tell a friend your safe bunk count")
+                        .font(.system(size: 15, weight: .black, design: .rounded))
+                        .foregroundStyle(.white)
+                    Text("Share how many classes you can still \(studentMarket.skipVerb) — or flex that you're in recovery mode.")
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.65))
+                    HStack(spacing: 10) {
+                        Button {
+                            AnalyticsService.shared.log(.atRiskSharePromptTapped)
+                            shareResult(result)
+                        } label: {
+                            Text("Share")
+                                .font(.system(size: 14, weight: .bold, design: .rounded))
+                                .foregroundStyle(.black.opacity(0.9))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 10)
+                                .background(Capsule().fill(Color(red: 0.32, green: 0.84, blue: 1.0)))
+                        }
+                        .buttonStyle(PressableButtonStyle())
+                        Button {
+                            UserDefaults.standard.set(true, forKey: dismissKey)
+                            dismissAtRiskSharePrompt = true
+                        } label: {
+                            Text("Not now")
+                                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.7))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 10)
+                        }
+                        .buttonStyle(PressableButtonStyle())
+                    }
+                }
+                .padding(16)
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(Color.white.opacity(0.05))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(Color.red.opacity(0.35), lineWidth: 1)
+                        )
+                )
+                .onAppear {
+                    AnalyticsService.shared.log(.atRiskSharePromptShown)
+                }
+            }
+        }
+    }
+
     private func floatingActionBanner(for result: AttendanceResult?) -> some View {
         let copy = contextualFABCopy(for: result)
         return Button {
@@ -3890,7 +4106,7 @@ private enum HomeTab: CaseIterable {
         case .overview:
             return "Overview"
         case .tools:
-            return "Tools"
+            return "More"
         }
     }
 
@@ -4010,7 +4226,7 @@ private struct HomePresentationModifier: ViewModifier {
                 ActivityView(activityItems: shareItems)
             }
             .sheet(isPresented: $isShowingSettings) {
-                SettingsSheetView(viewModel: viewModel)
+                SettingsSheetView(viewModel: viewModel, subjectStore: subjectStore)
                     .preferredColorScheme(.dark)
                     .analyticsScreen(.settings)
             }
@@ -4098,14 +4314,6 @@ private struct HomePresentationModifier: ViewModifier {
                 }
             }
         )
-    }
-}
-
-private struct PressableButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
-            .opacity(configuration.isPressed ? 0.85 : 1.0)
     }
 }
 

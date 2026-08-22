@@ -8,6 +8,8 @@
 	<true/>
 	<key>GADApplicationIdentifier</key>
 	<string>ca-app-pub-6782814088719675~7481844312</string>
+	<key>SchoolabeAPIBaseURL</key>
+	<string>https://api.schoolabe.com/api/v1/bunk-planner/sync</string>
 	<key>SKAdNetworkItems</key>
 	<array>
 		<dict><key>SKAdNetworkIdentifier</key><string>cstr6suwn9.skadnetwork</string></dict>

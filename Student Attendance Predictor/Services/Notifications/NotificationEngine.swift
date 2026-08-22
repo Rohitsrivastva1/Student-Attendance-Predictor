@@ -154,14 +154,13 @@ enum NotificationEngine {
 
         let keepEmoji = NotificationPersonalityConfig.enableWittyCopy
             && Double.random(in: 0..<1) < NotificationPersonalityConfig.emojiProbability
-        let title = NotificationCopyRenderer.maybeStripEmoji(
-            NotificationCopyRenderer.render(template.title, context: context),
-            keep: keepEmoji
+        let rendered = NotificationCopyRenderer.renderedCopy(
+            title: template.title,
+            body: template.body,
+            context: context
         )
-        let body = NotificationCopyRenderer.maybeStripEmoji(
-            NotificationCopyRenderer.render(template.body, context: context),
-            keep: keepEmoji
-        )
+        let title = NotificationCopyRenderer.maybeStripEmoji(rendered.title, keep: keepEmoji)
+        let body = NotificationCopyRenderer.maybeStripEmoji(rendered.body, keep: keepEmoji)
 
         return PersonalityNotificationPayload(
             category: template.category,

@@ -8,27 +8,33 @@ import SwiftUI
 struct GuidedSetupBanner: View {
     let step: GuidedSetupStep
     var onDismiss: () -> Void
+    var onAction: () -> Void
 
     private let cyan = Color(red: 0.32, green: 0.84, blue: 1.0)
     private let green = Color(red: 0.2, green: 0.9, blue: 0.5)
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: step == .addSubject ? "books.vertical.fill" : "hand.tap.fill")
-                .font(.system(size: 18, weight: .bold))
-                .foregroundStyle(step == .addSubject ? cyan : green)
-                .padding(.top, 2)
+            Button(action: onAction) {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: step == .addSubject ? "books.vertical.fill" : "hand.tap.fill")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(step == .addSubject ? cyan : green)
+                        .padding(.top, 2)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.system(size: 15, weight: .black, design: .rounded))
-                    .foregroundStyle(.white)
-                Text(subtitle)
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.65))
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(title)
+                            .font(.system(size: 15, weight: .black, design: .rounded))
+                            .foregroundStyle(.white)
+                        Text(subtitle)
+                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.65))
+                    }
+
+                    Spacer(minLength: 0)
+                }
             }
-
-            Spacer(minLength: 0)
+            .buttonStyle(PressableButtonStyle())
 
             Button(action: onDismiss) {
                 Image(systemName: "xmark")

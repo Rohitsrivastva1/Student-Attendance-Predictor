@@ -148,11 +148,19 @@ See [docs/release-notes-1.7.0.md](docs/release-notes-1.7.0.md).
 
 ---
 
-## v1.7.1 — Pro conversion fix (shipping)
+## v1.7.2 — Retention & student hub (ready to ship)
+
+See [docs/release-notes-1.7.2.md](docs/release-notes-1.7.2.md) · Marketing **1.7.2** · Build **20**
+
+Branch: `feature/retention-monetization-sprint` — merge to `main` before archive.
+
+---
+
+## v1.7.1 — Pro conversion fix (shipped)
 
 **Goal:** Ask for Pro after value, not after install. Fix purchase analytics gap.
 
-See [docs/release-notes-1.7.1.md](docs/release-notes-1.7.1.md) · Marketing **1.7.1** · Build **19**
+See [docs/release-notes-1.7.1.md](docs/release-notes-1.7.1.md) · Marketing **1.7.1** · Build **19** *(App Store prior release)*
 
 | ID | Sub-task | Status |
 |----|----------|--------|
@@ -175,10 +183,89 @@ Fix week-1 return (~14% today → target 25%+).
 |----|----------|--------|
 | P2.1 | Day-2 push if installed but never marked | [x] |
 | P2.2 | First-run guided path: add subject → Mark Today (4.4) | [x] |
-| P2.3 | Notification deep links → Mark Today; improve open rate | [x] |
+| P2.3 | Notification deep links → Mark Today; improve open rate | [x] *branch: feature/retention-monetization-sprint* |
 | P2.4 | Weekly digest notification Sun/Mon (2.9) | [x] *Pro Sunday digest* |
 | P2.5 | One-time widget prompt after first mark | [x] |
 | P2.6 | Instrument Focus Timer + Academics tab in analytics | [x] |
+| P2.7 | Notification engagement throttle (5+ sends, 0 opens → 1/week) | [x] *branch: feature/retention-monetization-sprint* |
+| P2.8 | Evening mark nudge (8 PM if opened app but didn't mark) | [x] *branch: feature/retention-monetization-sprint* |
+| P2.9 | At-risk alerts deep link → Skip Planner (not generic Home) | [x] *branch: feature/retention-monetization-sprint* |
+| P2.10 | Tappable FAB → Mark Today scroll/highlight or Skip Planner | [x] *branch: feature/retention-monetization-sprint* |
+| P2.11 | Pro purchase Try Again + Restore on failure | [x] *branch: feature/retention-monetization-sprint* |
+| P2.12 | Legacy IAP restore (`com.schoolabe.bunkplanner.*`) | [x] *branch: feature/retention-monetization-sprint* |
+| P2.13 | Locked forecast free preview line before Go Pro | [x] *branch: feature/retention-monetization-sprint* |
+| P2.14 | At-risk Home card → “Plan skips free” entry | [x] *branch: feature/retention-monetization-sprint* |
+| P2.15 | Soft paywall cooldown 5 days; at-risk week 3 source | [x] *branch: feature/retention-monetization-sprint* |
+
+**Target after ship:** notif open rate 12% → 25%+ · `day_marked`/WAU > 6 · `skip_planner_viewed` > 15% WAU.
+
+---
+
+## Backlog — Student hub & ecosystem (P5)
+
+**Strategy:** Keep users in-app with everything a student needs — but **connect features to the attendance loop**, not only the Tools tab. Tools tab stays as explorer directory; Home + notifications are the front door.
+
+**North-star metric:** **Multi-feature WAU** — % of weekly actives using **2+ of:** mark / skip planner / focus / forecast / widget.
+
+| ID | Sub-task | Status |
+|----|----------|--------|
+| P5.1 | Post–Mark Today prompt: “Focus 25 min on [subject]?” → Focus Timer | [x] *branch: feature/retention-monetization-sprint* |
+| P5.2 | Focus Timer pre-fill subject tag from last marked subject | [x] *branch: feature/retention-monetization-sprint* |
+| P5.3 | After Focus completes → optional “Mark study session?” / return Home | [x] *Live Activity mark prompt* |
+| P5.4 | Measure Focus loop: `day_marked` → `focus_timer_started` → next-day `day_marked` | [x] *funnel in [docs/analytics-wow-review.md](docs/analytics-wow-review.md)* |
+| P5.5 | Home rotating promo card (weekly): Skip Planner / Focus / Export / Widget | [x] *branch: feature/retention-monetization-sprint* |
+| P5.6 | Tools tab subtitle: “More tools” — secondary hub, not primary navigation story | [x] *branch: feature/retention-monetization-sprint* |
+| P5.7 | Firebase dashboard: multi-feature user % (2+ features/week) | [x] *`multi_feature_weekly` + user props* |
+| P5.8 | Mark `tools_viewed`, `skip_planner_viewed`, `focus_timer_started` as key events | [x] *listed in analytics doc — mark in Firebase console* |
+| P5.9 | Exam deadline warning → deep link to Academics/deadlines (126 events, low follow-through) | [x] *branch: feature/retention-monetization-sprint* |
+| P5.10 | Widget install prompt on all mark paths (FAB, log, Siri — not only celebration) | [x] *centralized in `recordDayMarked`* |
+| P5.11 | Guided setup: ensure fires for new users (currently ~0 events) | [x] *refresh after onboarding + `guided_setup_started`* |
+| P5.12 | Share after at-risk: “I can skip N safely” card (viral loop; 2 shares/week today) | [x] *branch: feature/retention-monetization-sprint* |
+| P5.13 | Siri / Shortcuts discoverability: Settings tip after streak 3 | [x] *branch: feature/retention-monetization-sprint* |
+| P5.14 | **Do not add new tabs** until `skip_planner_viewed` ≥ 15% WAU for 2 weeks | [ ] *guardrail — monitor weekly* |
+
+**Principle:** Focus Timer + GPA + deadlines stay in the product; **lead marketing and Home with attendance → bunk → plan skip → focus**.
+
+---
+
+## Backlog — Marketing & ASO (P6)
+
+**Positioning:** *“Know before you bunk”* — not generic student productivity.
+
+| ID | Sub-task | Status |
+|----|----------|--------|
+| P6.1 | App Store subtitle: safe bunk / attendance calculator angle | [ ] |
+| P6.2 | Screenshot 1: Mark Today (all subjects, one tap) | [ ] |
+| P6.3 | Screenshot 2: Skip Planner calendar (“which day can I skip?”) | [ ] |
+| P6.4 | Screenshot 3: At-risk + safe bunk count | [ ] |
+| P6.5 | Screenshot 4: Semester forecast preview | [ ] |
+| P6.6 | Screenshot 5: Widget + Focus Timer (breadth, not lead) | [ ] |
+| P6.7 | Keywords: bunk planner, attendance calculator, 75 attendance, skip class | [ ] |
+| P6.8 | “What’s New” template: lead core loop, list Tools/Focus as “also included” | [ ] |
+| P6.9 | Pro copy everywhere: “Pay once for the semester — know every safe skip” | [ ] |
+| P6.10 | India pricing narrative on paywall (₹49 one-time / semester framing) | [ ] |
+| P6.11 | Short-form video scripts: at-risk moment → Skip Planner → Pro (Reels/TikTok) | [ ] |
+| P6.12 | Referral CTA copy after streak 7 (pairs with 4.7 viral referral) | [ ] |
+
+See also [docs/aso-1.6.6.md](docs/aso-1.6.6.md) for prior ASO notes.
+
+---
+
+## Backlog — Analytics & ops (P7)
+
+Weekly review checklist (export Firebase + AdMob every Saturday).
+
+| ID | Sub-task | Status |
+|----|----------|--------|
+| P7.1 | Firebase key events: `day_marked`, `notif_opened`, `pro_purchase_succeeded`, `skip_planner_viewed` | [x] *see [docs/analytics-wow-review.md](docs/analytics-wow-review.md)* |
+| P7.2 | Funnel: notif scheduled → opened → deep_link → day_marked | [x] *§3.1 in analytics doc* |
+| P7.3 | Funnel: soft_paywall → paywall_viewed → started → succeeded/failed (by reason) | [x] *§3.2 in analytics doc* |
+| P7.4 | Funnel: banner requested → loaded → shown (by placement) | [x] *§3.3 in analytics doc* |
+| P7.5 | Link AdMob revenue → Firebase (unified ARPDAU) | [x] *§4 in analytics doc* |
+| P7.6 | WoW dashboard template (DAU, day_marked, Pro $, ad $, D1 retention) | [x] *[docs/analytics-wow-review.md](docs/analytics-wow-review.md)* |
+| P7.7 | Cohort compare: 1.7.1 vs sprint branch after ship | [x] *§6 in analytics doc* |
+
+**5× revenue watch (1 week):** Pro + ads ~$2.30 → target **$10+** · Pro success/started > 40% · banner load > 35%.
 
 ---
 
@@ -202,7 +289,7 @@ Do not enable mediation until banner show-rate ≥ 40% (currently ~15%).
 
 | ID | Sub-task | Status |
 |----|----------|--------|
-| P4.1 | Diagnose banner fill failures (unit, consent, placement) | [ ] |
+| P4.1 | Diagnose banner fill failures (unit, consent, placement) | [~] *quick retries + consent reset on branch* |
 | P4.2 | Mediation network for India (3.8) — after show-rate gate | [ ] |
 | P4.3 | Weekly show-rate check in Firebase + AdMob | [ ] |
 
@@ -210,7 +297,9 @@ Do not enable mediation until banner show-rate ≥ 40% (currently ~15%).
 
 ## Later backlog (not this slice)
 
-- [ ] **Firebase viral referral loop** — Auth + Firestore + Functions + Hosting invite links; both sides get 7 days ad-free. Full plan: [docs/plans/firebase-viral-referral.md](docs/plans/firebase-viral-referral.md). Also tracked as **4.7**.
+- [ ] **Firebase viral referral loop** — Auth + Firestore + Functions + Hosting invite links; both sides get 7 days ad-free. Full plan: [docs/plans/firebase-viral-referral.md](docs/plans/firebase-viral-referral.md). Also tracked as **4.7** and **P6.12**.
+- [x] **Student hub integration** — P5 complete except P5.14 guardrail monitoring.
+- [ ] **Marketing & ASO refresh** — full list in **P6**.
 - [ ] India holiday presets (2.6)
 - [ ] Mediation (3.8) — wait on show-rate
 - [ ] iCloud / CloudKit sync  
@@ -232,6 +321,10 @@ Shipped stickiness: Focus Timer Live Activity on Lock Screen and Dynamic Island.
 Shipped habit glue: Focus → Mark prompt on Live Activity; Siri “safest skip this week” + “mark all attended today”.
 
 Shipped Tools tab: unified hub for Focus Timer, CGPA/GPA calculator, and exam deadlines.
+
+**In progress (branch `feature/retention-monetization-sprint`):** notification action routes, engagement throttle, evening mark nudge, tappable FAB, forecast preview, Pro retry, legacy IAP restore, at-risk Skip Planner entry, banner ad retries, **P5 ecosystem hooks + P7 analytics ops doc**.
+
+**Next slice priority:** merge sprint branch → ship → mark Firebase key events in console → **P6.1–P6.7** (ASO) → monitor P5.14 guardrail (skip planner ≥ 15% WAU).
 
 ## Notes
 

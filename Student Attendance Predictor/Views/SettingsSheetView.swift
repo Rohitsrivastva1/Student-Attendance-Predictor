@@ -10,6 +10,7 @@ import UIKit
 
 struct SettingsSheetView: View {
     @ObservedObject var viewModel: AttendanceViewModel
+    @ObservedObject var subjectStore: SubjectStore
     @Environment(\.dismiss) private var dismiss
     @State private var defaultRequiredPercentage: String
     @State private var selectedMarket: StudentMarket
@@ -17,15 +18,22 @@ struct SettingsSheetView: View {
     @State private var adPrivacyErrorMessage: String?
     @State private var showAdPrivacyChoices = false
     @State private var isShowingProPaywall = false
+    @State private var isShowingProfileEditor = false
+    #if DEBUG
+    @State private var isShowingDebugTools = false
+    #endif
     @ObservedObject private var entitlements = AdEntitlementsStore.shared
     @AppStorage("feature.notificationsEnabled") private var notificationsEnabled = true
     @AppStorage("feature.wittyNotificationsEnabled") private var wittyNotificationsEnabled = true
+    @AppStorage("prompt.siriShortcutsTipDismissed") private var siriShortcutsTipDismissed = false
+    @State private var didLogSiriTipShown = false
     
     private let appStoreID = "6761951427"
     private let proGold = Color(red: 1.0, green: 0.78, blue: 0.28)
 
-    init(viewModel: AttendanceViewModel) {
+    init(viewModel: AttendanceViewModel, subjectStore: SubjectStore) {
         self.viewModel = viewModel
+        self.subjectStore = subjectStore
         _defaultRequiredPercentage = State(
             initialValue: SettingsSheetView.formattedPercentage(viewModel.defaultRequiredPercentage)
         )
@@ -105,26 +113,47 @@ struct SettingsSheetView: View {
                 #if DEBUG
                 Section {
                     Button {
-                        entitlements.setProUnlocked(!entitlements.isPro)
+                        isShowingDebugTools = true
                     } label: {
                         HStack {
-                            Label(
-                                entitlements.isPro ? "Disable Pro (Debug)" : "Enable Pro (Debug)",
-                                systemImage: entitlements.isPro ? "crown.fill" : "crown"
-                            )
+                            Label("Debug tools", systemImage: "ladybug.fill")
                             Spacer()
-                            Text(entitlements.isPro ? "ON" : "OFF")
+                            Text(entitlements.isPro ? "Pro ON" : "Free")
                                 .font(.system(size: 12, weight: .bold, design: .rounded))
                                 .foregroundStyle(entitlements.isPro ? .green : .secondary)
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.secondary)
                         }
                     }
-                    Text("DEBUG builds only. Toggles Pro without StoreKit.")
+                    Text("Enable premium, reset coach marks, and QA helpers. DEBUG builds only.")
                         .font(.system(size: 12, weight: .medium, design: .rounded))
                         .foregroundStyle(.secondary)
                 } header: {
                     Text("Debug")
                 }
                 #endif
+
+                Section("About you") {
+                    Button {
+                        isShowingProfileEditor = true
+                    } label: {
+                        HStack {
+                            Label("Student profile", systemImage: "person.crop.circle")
+                            Spacer()
+                            Text(profileSummaryLabel)
+                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Text("Optional name, class, and college — synced to Schoolabe if you save. Attendance numbers stay on device.")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(.secondary)
+                }
 
                 Section("Defaults") {
                     VStack(alignment: .leading, spacing: 8) {
@@ -224,6 +253,32 @@ struct SettingsSheetView: View {
                     }
                 }
 
+                if siriShortcutsTipDismissed == false,
+                   AnalyticsService.shared.currentStreakDays >= 3 {
+                    Section("Siri & Shortcuts") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label("Mark hands-free", systemImage: "waveform")
+                                .font(.system(size: 15, weight: .bold, design: .rounded))
+                            Text("Say “Hey Siri, mark all attended in Bunk Planner” or ask for your safest skip day this week.")
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .foregroundStyle(.secondary)
+                            Text("Open the Shortcuts app → Bunk Planner to pin actions to your Lock Screen.")
+                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 4)
+
+                        Button("Got it") {
+                            siriShortcutsTipDismissed = true
+                        }
+                    }
+                    .onAppear {
+                        guard didLogSiriTipShown == false else { return }
+                        didLogSiriTipShown = true
+                        AnalyticsService.shared.log(.siriShortcutsTipShown)
+                    }
+                }
+
                 Section("Automation") {
                     Toggle("Risk Notifications", isOn: $notificationsEnabled)
                         .onChange(of: notificationsEnabled) { _, enabled in
@@ -303,6 +358,14 @@ struct SettingsSheetView: View {
                     .preferredColorScheme(.dark)
                     .analyticsScreen(.proPaywall)
             }
+            #if DEBUG
+            .sheet(isPresented: $isShowingDebugTools) {
+                DebugToolsView()
+            }
+            #endif
+            .sheet(isPresented: $isShowingProfileEditor) {
+                StudentProfileEditorView(subjectStore: subjectStore)
+            }
             .alert("Ad Privacy", isPresented: Binding(
                 get: { adPrivacyErrorMessage != nil },
                 set: { isPresented in
@@ -335,6 +398,17 @@ struct SettingsSheetView: View {
                 }
             }
         }
+    }
+
+    private var profileSummaryLabel: String {
+        let profile = StudentProfileStore.shared.profile
+        if profile.name.isEmpty == false {
+            return profile.name
+        }
+        if StudentProfileStore.shared.didCompleteProfileStep {
+            return "Not provided"
+        }
+        return "Add details"
     }
 
     private func saveDefault() {
@@ -406,5 +480,5 @@ struct SettingsSheetView: View {
 }
 
 #Preview {
-    SettingsSheetView(viewModel: AttendanceViewModel())
+    SettingsSheetView(viewModel: AttendanceViewModel(), subjectStore: SubjectStore())
 }

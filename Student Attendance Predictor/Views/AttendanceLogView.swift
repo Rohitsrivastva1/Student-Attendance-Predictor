@@ -15,6 +15,8 @@ struct MarkTodayCard: View {
     @ObservedObject var subjectStore: SubjectStore
     var isHighlighted: Bool = false
     var onCelebrated: (() -> Void)? = nil
+    /// Fires when every subject scheduled today has been marked (optional focus prompt).
+    var onAllSubjectsMarkedToday: ((SubjectSummary?) -> Void)? = nil
     var onAddSubject: (() -> Void)? = nil
 
     @State private var showCelebration = false
@@ -506,6 +508,10 @@ struct MarkTodayCard: View {
 
     private func triggerCelebration() {
         onCelebrated?()
+        if unmarkedSubjects.isEmpty, subjectsToday.isEmpty == false {
+            let lastMarked = subjectsToday.first { subjectStore.logEntry(subjectID: $0.id, date: today) != nil }
+            onAllSubjectsMarkedToday?(lastMarked ?? subjectsToday.first)
+        }
         withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
             showCelebration = true
             celebratePulse = true

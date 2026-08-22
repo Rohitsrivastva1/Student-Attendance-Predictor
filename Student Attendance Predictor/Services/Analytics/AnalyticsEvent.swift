@@ -61,10 +61,21 @@ enum AnalyticsEvent {
     case csvExportShared(rowCount: Int)
     case skipPlannerViewed(dayCount: Int)
     case skipPlannerLocked
+    case guidedSetupStarted
     case guidedSetupStepShown(step: String)
     case guidedSetupCompleted
+    case guidedSetupDismissed(step: String)
     case holidayPresetApplied(presetID: String, cancelledClasses: Int)
     case widgetPromptShown
+    case postMarkFocusPromptShown(subjectName: String)
+    case postMarkFocusPromptAccepted(minutes: Int)
+    case postMarkFocusPromptDismissed
+    case atRiskSharePromptShown
+    case atRiskSharePromptTapped
+    case siriShortcutsTipShown
+    case homePromoCardShown(kind: String)
+    case homePromoCardTapped(kind: String, action: String)
+    case multiFeatureWeeklyUser(featureCount: Int, features: String)
 
     // MARK: Engagement depth
     case markTodayFirstUse
@@ -137,6 +148,7 @@ enum AnalyticsEvent {
     case academicDeadlineDeleted
     case academicTargetViewed(market: String)
     case academicExamAttendanceWarningShown
+    case academicExamAttendanceWarningTapped
     case academicTermArchived
     case academicsViewed(
         market: String,
@@ -170,6 +182,10 @@ enum AnalyticsEvent {
     case onboardingShown
     case onboardingSkipped(reason: String)
     case onboardingCompleted(via: String)
+    case studentProfileCompleted(skipped: Bool)
+    case studentProfileUpdated(source: String)
+    case schoolabeSyncSucceeded(subjectCount: Int)
+    case schoolabeSyncFailed(reason: String)
     case softPaywallTriggered(source: String)
 
     // MARK: Settings & misc
@@ -241,10 +257,21 @@ extension AnalyticsEvent {
         case .csvExportShared: return "csv_export_shared"
         case .skipPlannerViewed: return "skip_planner_viewed"
         case .skipPlannerLocked: return "skip_planner_locked"
+        case .guidedSetupStarted: return "guided_setup_started"
         case .guidedSetupStepShown: return "guided_setup_step"
         case .guidedSetupCompleted: return "guided_setup_completed"
+        case .guidedSetupDismissed: return "guided_setup_dismissed"
         case .holidayPresetApplied: return "holiday_preset_applied"
         case .widgetPromptShown: return "widget_prompt_shown"
+        case .postMarkFocusPromptShown: return "post_mark_focus_prompt_shown"
+        case .postMarkFocusPromptAccepted: return "post_mark_focus_prompt_accepted"
+        case .postMarkFocusPromptDismissed: return "post_mark_focus_prompt_dismissed"
+        case .atRiskSharePromptShown: return "at_risk_share_prompt_shown"
+        case .atRiskSharePromptTapped: return "at_risk_share_prompt_tapped"
+        case .siriShortcutsTipShown: return "siri_shortcuts_tip_shown"
+        case .homePromoCardShown: return "home_promo_shown"
+        case .homePromoCardTapped: return "home_promo_tapped"
+        case .multiFeatureWeeklyUser: return "multi_feature_weekly"
 
         case .markTodayFirstUse: return "mark_today_first_use"
         case .weeklyActiveDays: return "weekly_active_days"
@@ -263,6 +290,7 @@ extension AnalyticsEvent {
         case .academicDeadlineDeleted: return "academic_deadline_deleted"
         case .academicTargetViewed: return "academic_target_viewed"
         case .academicExamAttendanceWarningShown: return "exam_attendance_warning"
+        case .academicExamAttendanceWarningTapped: return "exam_attendance_warning_tapped"
         case .academicTermArchived: return "academic_term_archived"
         case .academicsViewed: return "academics_viewed"
         case .toolsViewed: return "tools_viewed"
@@ -324,6 +352,10 @@ extension AnalyticsEvent {
         case .onboardingShown: return "onboarding_shown"
         case .onboardingSkipped: return "onboarding_skipped"
         case .onboardingCompleted: return "onboarding_completed"
+        case .studentProfileCompleted: return "student_profile_completed"
+        case .studentProfileUpdated: return "student_profile_updated"
+        case .schoolabeSyncSucceeded: return "schoolabe_sync_succeeded"
+        case .schoolabeSyncFailed: return "schoolabe_sync_failed"
         case .softPaywallTriggered: return "soft_paywall_triggered"
 
         case .rateUsTapped: return "rate_us_tapped"
@@ -354,15 +386,19 @@ extension AnalyticsEvent {
              .forecastUnlocked, .lockedForecastViewed, .markTodayFirstUse,
              .logDayEdited, .retentionDay7, .retentionDay30,
              .csvExportTapped, .skipPlannerLocked, .focusProDurationTapped,
-             .guidedSetupCompleted, .widgetPromptShown, .focusLiveActivityEnded,
+             .guidedSetupStarted, .guidedSetupCompleted, .widgetPromptShown, .focusLiveActivityEnded,
+             .academicExamAttendanceWarningShown, .academicExamAttendanceWarningTapped,
              .focusMarkPromptDismissed, .siriSafestSkipRequested,
+             .postMarkFocusPromptDismissed, .atRiskSharePromptShown,
+             .atRiskSharePromptTapped,
+             .siriShortcutsTipShown,
              .rateUsTapped, .adPrivacyChoicesOpened, .reviewPromptShown,
              .settingsOpened, .timetableEditorOpened, .shareCancelled,
              .appOpenAdRequested, .appOpenAdShown,
              .proRestoreStarted, .proRestoreSucceeded, .proRestoreFailed,
              .onboardingShown, .pdfExportTapped,
              .academicCourseUpdated, .academicDeadlineUpdated, .academicDeadlineDeleted,
-             .academicExamAttendanceWarningShown, .academicTermArchived,
+             .academicTermArchived,
              .academicDeadlineAddTapped:
             return [:]
 
@@ -430,6 +466,18 @@ extension AnalyticsEvent {
 
         case let .onboardingCompleted(via):
             return ["via": via]
+
+        case let .studentProfileCompleted(skipped):
+            return ["skipped": skipped]
+
+        case let .studentProfileUpdated(source):
+            return ["source": source]
+
+        case let .schoolabeSyncSucceeded(subjectCount):
+            return ["subject_count": subjectCount]
+
+        case let .schoolabeSyncFailed(reason):
+            return ["reason": String(reason.prefix(80))]
 
         case let .softPaywallTriggered(source):
             return ["source": source]
@@ -517,6 +565,9 @@ extension AnalyticsEvent {
 
         case let .skipPlannerViewed(dayCount):
             return ["day_count": dayCount]
+
+        case let .guidedSetupDismissed(step):
+            return ["step": step]
 
         case let .guidedSetupStepShown(step):
             return ["step": step]
@@ -697,6 +748,21 @@ extension AnalyticsEvent {
 
         case let .proPurchaseCancelled(source):
             return ["source": source]
+
+        case let .postMarkFocusPromptShown(subjectName):
+            return ["subject_name": String(subjectName.prefix(24))]
+
+        case let .postMarkFocusPromptAccepted(minutes):
+            return ["minutes": minutes]
+
+        case let .homePromoCardShown(kind):
+            return ["kind": kind]
+
+        case let .homePromoCardTapped(kind, action):
+            return ["kind": kind, "action": action]
+
+        case let .multiFeatureWeeklyUser(featureCount, features):
+            return ["feature_count": featureCount, "features": String(features.prefix(60))]
         }
     }
 }

@@ -39,7 +39,7 @@ enum NotificationTemplates {
                     id: "plain_evening_empty",
                     category: .classReminder,
                     variant: "plain",
-                    title: "Did you attend today?",
+                    title: "{name_comma}did you attend today?",
                     body: "Tap to log today's attendance in one tap."
                 )
             }
@@ -134,7 +134,7 @@ enum NotificationTemplates {
 
     private static let funny: [NotificationTemplate] = [
         .init(id: "funny_01", category: .funny, variant: "a",
-              title: "Attendance called.",
+              title: "{name_hey}, attendance called.",
               body: "It brought a clipboard. {subject_name} is at {attendance_percentage}."),
         .init(id: "funny_02", category: .funny, variant: "b",
               title: "Another lecture.",
@@ -243,7 +243,7 @@ enum NotificationTemplates {
 
     private static let lowAttendance: [NotificationTemplate] = [
         .init(id: "low_01", category: .lowAttendance, variant: "a",
-              title: "We need to talk.",
+              title: "{name_comma}we need to talk.",
               body: "You're at {attendance_percentage}. {required_percentage} isn't going to chase itself."),
         .init(id: "low_02", category: .lowAttendance, variant: "b",
               title: "Red zone.",
@@ -303,7 +303,7 @@ enum NotificationTemplates {
 
     private static let streak: [NotificationTemplate] = [
         .init(id: "str_01", category: .streak, variant: "a",
-              title: "Look who's consistent.",
+              title: "{name_comma}look who's consistent.",
               body: "{streak_days}-day streak. We barely recognize this version of you."),
         .init(id: "str_02", category: .streak, variant: "b",
               title: "Character development.",

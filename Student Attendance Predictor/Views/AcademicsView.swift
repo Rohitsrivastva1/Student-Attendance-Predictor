@@ -44,26 +44,37 @@ struct AcademicsView: View {
     @State private var lastLoggedTargetResult: String?
 
     private let cyan = Color(red: 0.32, green: 0.84, blue: 1.0)
+    private let coral = Color(red: 1.0, green: 0.45, blue: 0.45)
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            if mode == .grades {
-                header
-            } else {
-                Text(headerSubtitle)
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.6))
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                switch mode {
+                case .grades:
+                    gpaCard
+                    if gpaStore.activeCourses.isEmpty == false || gpaStore.courses.isEmpty == false {
+                        targetCard
+                    }
+                case .deadlines:
+                    deadlinesContent
+                }
             }
-            switch mode {
-            case .grades:
-                gpaCard
-                targetCard
-            case .deadlines:
-                deadlinesCard
-            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .background(Color(red: 0.05, green: 0.06, blue: 0.1).ignoresSafeArea())
         .navigationTitle(navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                if mode == .grades {
+                    addCourseToolbarButton
+                } else {
+                    addDeadlineToolbarButton
+                }
+            }
+        }
         .onAppear {
             AnalyticsService.shared.setScreen(.academics)
             AnalyticsService.shared.log(
@@ -129,13 +140,47 @@ struct AcademicsView: View {
             Text(headerSubtitle)
                 .font(.system(size: 13, weight: .medium, design: .rounded))
                 .foregroundStyle(.white.opacity(0.6))
+                .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private var addCourseToolbarButton: some View {
+        Button {
+            AnalyticsService.shared.log(.academicCourseAddTapped(market: market.rawValue))
+            resetFormDefaults()
+            showAddCourse = true
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(cyan)
+        }
+        .accessibilityLabel("Add subject")
+    }
+
+    private var addDeadlineToolbarButton: some View {
+        Button {
+            AnalyticsService.shared.log(.academicDeadlineAddTapped)
+            resetDeadlineDefaults()
+            showAddDeadline = true
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(coral)
+        }
+        .accessibilityLabel("Add deadline")
     }
 
     private var headerTitle: String {
         switch mode {
-        case .grades: return market.academicsHeadline
-        case .deadlines: return "Exams & Deadlines"
+        case .grades:
+            switch market {
+            case .india: return "10-point CGPA"
+            case .unitedKingdom: return "Module marks"
+            case .unitedStates: return "4.0 GPA"
+            case .other: return "GPA tracker"
+            }
+        case .deadlines:
+            return "Exams & deadlines"
         }
     }
 
@@ -143,55 +188,113 @@ struct AcademicsView: View {
         switch mode {
         case .grades: return market.academicsSubtitle
         case .deadlines:
-            return "Local reminders before exams and assignment due dates."
+            return "Local reminders before exams and assignments — tap a row to edit."
         }
     }
 
     // MARK: - GPA / CGPA / Modules card
 
     private var gpaCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text(market.gpaScaleLabel)
-                    .font(.system(size: 14, weight: .black, design: .rounded))
-                    .foregroundStyle(.white)
-                Spacer()
-                Button {
-                    AnalyticsService.shared.log(.academicCourseAddTapped(market: market.rawValue))
-                    resetFormDefaults()
-                    showAddCourse = true
-                } label: {
-                    Label("Add", systemImage: "plus")
+        VStack(alignment: .leading, spacing: 16) {
+            header
+
+            if gpaStore.activeCourses.isEmpty && gpaStore.courses.isEmpty {
+                gradesEmptyState
+            } else {
+                scoreHero
+
+                if gpaStore.openTerms.count > 1 || gpaStore.archivedTerms.isEmpty == false {
+                    termChrome
+                } else if let term = gpaStore.activeTerm {
+                    Text(term.name)
                         .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundStyle(cyan)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Capsule(style: .continuous).fill(cyan.opacity(0.15)))
                 }
-            }
 
-            scoreHero
-            termChrome
+                if gpaStore.activeCourses.isEmpty == false {
+                    VStack(spacing: 0) {
+                        ForEach(gpaStore.activeCourses) { course in
+                            courseRow(course)
+                            if course.id != gpaStore.activeCourses.last?.id {
+                                Divider().overlay(Color.white.opacity(0.08))
+                            }
+                        }
+                    }
+                }
 
-            if gpaStore.activeCourses.isEmpty {
-                Text(emptyCoursesCopy)
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.65))
-            }
-
-            ForEach(gpaStore.activeCourses) { course in
-                courseRow(course)
-            }
-
-            if gpaStore.archivedTerms.isEmpty == false {
-                archivedTermsSection
+                if gpaStore.archivedTerms.isEmpty == false {
+                    archivedTermsSection
+                }
             }
         }
         .padding(16)
         .background(cardBackground)
     }
 
+    private var gradesEmptyState: some View {
+        VStack(spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill(cyan.opacity(0.12))
+                    .frame(width: 72, height: 72)
+                Image(systemName: "graduationcap.fill")
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(cyan)
+            }
+
+            VStack(spacing: 6) {
+                Text(emptyCoursesHeadline)
+                    .font(.system(size: 16, weight: .black, design: .rounded))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                Text(emptyCoursesCopy)
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .multilineTextAlignment(.center)
+            }
+
+            Button {
+                AnalyticsService.shared.log(.academicCourseAddTapped(market: market.rawValue))
+                resetFormDefaults()
+                showAddCourse = true
+            } label: {
+                Text(addFirstCourseLabel)
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .foregroundStyle(.black.opacity(0.88))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Capsule(style: .continuous).fill(cyan))
+            }
+            .buttonStyle(PressableButtonStyle())
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+    }
+
+    private var emptyCoursesHeadline: String {
+        switch market {
+        case .india: return "No subjects yet"
+        case .unitedKingdom: return "No modules yet"
+        case .unitedStates, .other: return "No courses yet"
+        }
+    }
+
+    private var addFirstCourseLabel: String {
+        switch market {
+        case .india: return "Add first subject"
+        case .unitedKingdom: return "Add first module"
+        case .unitedStates, .other: return "Add first course"
+        }
+    }
+
     private var emptyCoursesCopy: String {
         switch market {
-        case .india: return "Add subjects with UGC grades (O–F) for this semester."
-        case .unitedKingdom: return "Add module marks for this term."
-        case .unitedStates, .other: return "Add courses for this semester."
+        case .india: return "UGC grades O–F with credits — we’ll calculate CGPA and SGPA."
+        case .unitedKingdom: return "Enter module % and credits to see your average and classification."
+        case .unitedStates, .other: return "Letter grades and credits — live semester and cumulative GPA."
         }
     }
 
@@ -256,16 +359,17 @@ struct AcademicsView: View {
                         .foregroundStyle(cyan)
                 }
                 Spacer()
-                Button {
-                    newTermName = ""
-                    showArchiveConfirm = true
-                } label: {
-                    Label("Archive semester", systemImage: "archivebox")
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.75))
+                if gpaStore.activeCourses.isEmpty == false {
+                    Button {
+                        newTermName = ""
+                        showArchiveConfirm = true
+                    } label: {
+                        Label("Archive semester", systemImage: "archivebox")
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.75))
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
-                .disabled(gpaStore.activeCourses.isEmpty && gpaStore.archivedTerms.isEmpty == false)
             }
         }
     }
@@ -350,9 +454,7 @@ struct AcademicsView: View {
                     Spacer()
                 }
             } else {
-                Text("Add subjects with UGC grades (O–F) to see your CGPA.")
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.65))
+                compactScorePlaceholder(icon: "plus", message: compactEmptyScoreMessage)
             }
 
         case .unitedKingdom:
@@ -372,9 +474,7 @@ struct AcademicsView: View {
                     Spacer()
                 }
             } else {
-                Text("Add module marks to see your average % and classification.")
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.65))
+                compactScorePlaceholder(icon: "plus", message: compactEmptyScoreMessage)
             }
 
         case .unitedStates, .other:
@@ -399,10 +499,33 @@ struct AcademicsView: View {
                     Spacer()
                 }
             } else {
-                Text("Add courses to see a live GPA.")
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.65))
+                compactScorePlaceholder(icon: "plus", message: compactEmptyScoreMessage)
             }
+        }
+    }
+
+    private var compactEmptyScoreMessage: String {
+        switch market {
+        case .india: return "Add subjects this semester to update SGPA."
+        case .unitedKingdom: return "Add modules this term to update your average."
+        case .unitedStates, .other: return "Add courses this semester to update GPA."
+        }
+    }
+
+    private func compactScorePlaceholder(icon: String, message: String) -> some View {
+        HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(cyan.opacity(0.12))
+                    .frame(width: 48, height: 48)
+                Image(systemName: icon)
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(cyan.opacity(0.7))
+            }
+            Text(message)
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .foregroundStyle(.white.opacity(0.55))
+            Spacer(minLength: 0)
         }
     }
 
@@ -415,38 +538,62 @@ struct AcademicsView: View {
     // MARK: - Target / what-if
 
     private var targetCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             Text(targetTitle)
-                .font(.system(size: 14, weight: .black, design: .rounded))
+                .font(.system(size: 15, weight: .black, design: .rounded))
                 .foregroundStyle(.white)
 
             Text(targetHint)
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(.white.opacity(0.55))
 
-            HStack(spacing: 10) {
-                TextField(targetPlaceholder, text: $targetInput)
-                    .keyboardType(.decimalPad)
-                    .padding(10)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.06)))
-                TextField("Remaining credits", text: $remainingCreditsInput)
-                    .keyboardType(.decimalPad)
-                    .padding(10)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.06)))
+            VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(targetFieldLabel)
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.45))
+                    TextField(targetPlaceholder, text: $targetInput)
+                        .keyboardType(.decimalPad)
+                        .padding(12)
+                        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.06)))
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Remaining credits")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.45))
+                    TextField("e.g. 18", text: $remainingCreditsInput)
+                        .keyboardType(.decimalPad)
+                        .padding(12)
+                        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.06)))
+                }
             }
-            .font(.system(size: 14, weight: .semibold, design: .rounded))
+            .font(.system(size: 15, weight: .semibold, design: .rounded))
             .foregroundStyle(.white)
 
             if let result = targetResultText {
                 Text(result)
                     .font(.system(size: 13, weight: .heavy, design: .rounded))
                     .foregroundStyle(cyan)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(cyan.opacity(0.1))
+                    )
             }
         }
         .padding(16)
         .background(cardBackground)
         .onChange(of: targetInput) { _, _ in logTargetResultIfNeeded() }
         .onChange(of: remainingCreditsInput) { _, _ in logTargetResultIfNeeded() }
+    }
+
+    private var targetFieldLabel: String {
+        switch market {
+        case .india: return "Target CGPA"
+        case .unitedKingdom: return "Target average %"
+        case .unitedStates, .other: return "Target GPA"
+        }
     }
 
     private func logTargetResultIfNeeded() {
@@ -546,35 +693,78 @@ struct AcademicsView: View {
 
     // MARK: - Deadlines
 
-    private var deadlinesCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                if deadlineStore.upcoming.isEmpty == false {
-                    Text("Upcoming")
-                        .font(.system(size: 14, weight: .black, design: .rounded))
-                        .foregroundStyle(.white)
-                }
-                Spacer()
-                Button {
-                    AnalyticsService.shared.log(.academicDeadlineAddTapped)
-                    resetDeadlineDefaults()
-                    showAddDeadline = true
-                } label: {
-                    Label("Add", systemImage: "plus")
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
-                }
-            }
-
-            Text("Reminders fire 7 days, 3 days, 1 day before, and on the morning of the due date.")
-                .font(.system(size: 11, weight: .medium, design: .rounded))
-                .foregroundStyle(.white.opacity(0.45))
+    private var deadlinesContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            header
 
             if deadlineStore.upcoming.isEmpty && deadlineStore.past.isEmpty {
-                deadlinesEmptyState
+                deadlinesEmptyCard
+            } else {
+                deadlinesListCard
+            }
+        }
+    }
+
+    private var deadlinesEmptyCard: some View {
+        VStack(spacing: 16) {
+            ZStack {
+                Circle()
+                    .fill(coral.opacity(0.12))
+                    .frame(width: 72, height: 72)
+                Image(systemName: "calendar.badge.clock")
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(coral)
             }
 
-            ForEach(deadlineStore.upcoming.prefix(8)) { item in
-                deadlineRow(item)
+            VStack(spacing: 6) {
+                Text("No exams or assignments yet")
+                    .font(.system(size: 16, weight: .black, design: .rounded))
+                    .foregroundStyle(.white)
+                Text("Add dates so Bunk Planner can nudge you — and warn you on Home when not to \(market.skipVerb).")
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .multilineTextAlignment(.center)
+            }
+
+            Button {
+                AnalyticsService.shared.log(.academicDeadlineAddTapped)
+                resetDeadlineDefaults()
+                showAddDeadline = true
+            } label: {
+                Text("Add first deadline")
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .foregroundStyle(.black.opacity(0.88))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Capsule(style: .continuous).fill(coral))
+            }
+            .buttonStyle(PressableButtonStyle())
+
+            Text("Reminders at 7 days, 3 days, 1 day before, and the morning of the due date.")
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(.white.opacity(0.4))
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(20)
+        .background(cardBackground)
+    }
+
+    private var deadlinesListCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if deadlineStore.upcoming.isEmpty == false {
+                Text("Upcoming · \(deadlineStore.upcoming.count)")
+                    .font(.system(size: 13, weight: .black, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.55))
+            }
+
+            VStack(spacing: 0) {
+                ForEach(deadlineStore.upcoming.prefix(8)) { item in
+                    deadlineRow(item)
+                    if item.id != deadlineStore.upcoming.prefix(8).last?.id {
+                        Divider().overlay(Color.white.opacity(0.08))
+                    }
+                }
             }
 
             if deadlineStore.past.isEmpty == false {
@@ -586,38 +776,13 @@ struct AcademicsView: View {
                     deadlineRow(item, dimmed: true)
                 }
             }
+
+            Text("Reminders at 7, 3, and 1 day before — plus the morning of.")
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(.white.opacity(0.38))
         }
         .padding(16)
         .background(cardBackground)
-    }
-
-    private var deadlinesEmptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "calendar.badge.clock")
-                .font(.system(size: 32, weight: .semibold))
-                .foregroundStyle(cyan.opacity(0.85))
-            Text("No exams or assignments yet")
-                .font(.system(size: 15, weight: .bold, design: .rounded))
-                .foregroundStyle(.white)
-            Text("Add dates so Bunk Planner can remind you—and you know when not to \(market.skipVerb).")
-                .font(.system(size: 12, weight: .medium, design: .rounded))
-                .foregroundStyle(.white.opacity(0.55))
-                .multilineTextAlignment(.center)
-            Button {
-                AnalyticsService.shared.log(.academicDeadlineAddTapped)
-                resetDeadlineDefaults()
-                showAddDeadline = true
-            } label: {
-                Label("Add first deadline", systemImage: "plus.circle.fill")
-                    .font(.system(size: 14, weight: .bold, design: .rounded))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(cyan)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
     }
 
     private func deadlineRow(_ item: AcademicDeadline, dimmed: Bool = false) -> some View {
@@ -694,10 +859,10 @@ struct AcademicsView: View {
 
     private var cardBackground: some View {
         RoundedRectangle(cornerRadius: 18, style: .continuous)
-            .fill(Color.white.opacity(0.06))
+            .fill(Color.white.opacity(0.07))
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                    .stroke(Color.white.opacity(0.14), lineWidth: 1)
             )
     }
 
