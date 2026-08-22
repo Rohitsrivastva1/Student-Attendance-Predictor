@@ -30,8 +30,7 @@ struct SettingsSheetView: View {
     @AppStorage("feature.wittyNotificationsEnabled") private var wittyNotificationsEnabled = true
     @AppStorage("prompt.siriShortcutsTipDismissed") private var siriShortcutsTipDismissed = false
     @State private var didLogSiriTipShown = false
-    
-    private let appStoreID = "6761951427"
+
     private let proGold = Color(red: 1.0, green: 0.78, blue: 0.28)
 
     init(viewModel: AttendanceViewModel, subjectStore: SubjectStore) {
@@ -357,7 +356,7 @@ struct SettingsSheetView: View {
                         openRateUsFlow()
                     }
                     
-                    Text("This opens the App Store review page where ratings submit reliably.")
+                    Text("Opens the App Store review page for Bunk Planner (or the in-app rating prompt if the store app is unavailable).")
                         .font(.system(size: 12, weight: .medium, design: .rounded))
                         .foregroundStyle(.secondary)
                 }
@@ -509,18 +508,12 @@ struct SettingsSheetView: View {
 
     private func openRateUsFlow() {
         AnalyticsService.shared.log(.rateUsTapped)
-        #if canImport(UIKit)
-        // Official StoreKit deep link. Prefer https://apps.apple.com (not itunes.apple.com).
-        // Do not use canOpenURL(itms-apps:) — without LSApplicationQueriesSchemes it
-        // returns false and falsely shows "App Store is not available".
-        guard let url = URL(string: "https://apps.apple.com/app/id\(appStoreID)?action=write-review") else {
-            rateErrorMessage = "Could not create App Store review URL."
-            return
+        Task { @MainActor in
+            let opened = await AppStoreReviewOpener.openWriteReview()
+            if opened == false {
+                rateErrorMessage = "Could not open the App Store. Search for “Bunk Planner” in the App Store to leave a review."
+            }
         }
-        UIApplication.shared.open(url)
-        #else
-        rateErrorMessage = "App Store review is available on iOS only."
-        #endif
     }
 
     private static func formattedPercentage(_ value: Double) -> String {
