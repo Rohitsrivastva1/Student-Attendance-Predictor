@@ -22,9 +22,6 @@ struct SettingsSheetView: View {
     @State private var showRemoveUserDataConfirmation = false
     @State private var isRemovingUserData = false
     @State private var removeUserDataErrorMessage: String?
-    #if DEBUG
-    @State private var isShowingDebugTools = false
-    #endif
     @ObservedObject private var entitlements = AdEntitlementsStore.shared
     @AppStorage("feature.notificationsEnabled") private var notificationsEnabled = true
     @AppStorage("feature.wittyNotificationsEnabled") private var wittyNotificationsEnabled = true
@@ -111,30 +108,6 @@ struct SettingsSheetView: View {
                 } header: {
                     Text("Pro")
                 }
-
-                #if DEBUG
-                Section {
-                    Button {
-                        isShowingDebugTools = true
-                    } label: {
-                        HStack {
-                            Label("Debug tools", systemImage: "ladybug.fill")
-                            Spacer()
-                            Text(entitlements.isPro ? "Pro ON" : "Free")
-                                .font(.system(size: 12, weight: .bold, design: .rounded))
-                                .foregroundStyle(entitlements.isPro ? .green : .secondary)
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Text("Enable premium, reset coach marks, and QA helpers. DEBUG builds only.")
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
-                        .foregroundStyle(.secondary)
-                } header: {
-                    Text("Debug")
-                }
-                #endif
 
                 Section("About you") {
                     Button {
@@ -374,11 +347,6 @@ struct SettingsSheetView: View {
                     .preferredColorScheme(.dark)
                     .analyticsScreen(.proPaywall)
             }
-            #if DEBUG
-            .sheet(isPresented: $isShowingDebugTools) {
-                DebugToolsView()
-            }
-            #endif
             .sheet(isPresented: $isShowingProfileEditor) {
                 StudentProfileEditorView(subjectStore: subjectStore)
             }

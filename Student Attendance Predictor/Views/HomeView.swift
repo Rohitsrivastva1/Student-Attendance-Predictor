@@ -54,12 +54,10 @@ struct HomeView: View {
     @State private var showFocusTimerSheet = false
     @State private var dismissAtRiskSharePrompt = false
     @State private var pendingToolsDeadlines = false
-    #if DEBUG
-    @State private var isShowingDebugTools = false
-    #endif
     @ObservedObject private var widgetPrompt = WidgetPromptCoordinator.shared
     @ObservedObject private var guidedSetup = GuidedSetupStore.shared
     @ObservedObject private var notificationRoute = NotificationRouteStore.shared
+    @ObservedObject private var reviewPromptCoordinator = AppStoreReviewPromptCoordinator.shared
 
     private var hasAttendanceData: Bool {
         viewModel.totalClasses > 0
@@ -210,17 +208,6 @@ struct HomeView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
-                #if DEBUG
-                Button {
-                    triggerLightHaptic()
-                    isShowingDebugTools = true
-                } label: {
-                    Image(systemName: "ladybug.fill")
-                        .foregroundStyle(Color.orange)
-                }
-                .accessibilityLabel("Debug tools")
-                #endif
-
                 Button {
                     triggerLightHaptic()
                     isShowingSubjects = true
@@ -263,6 +250,16 @@ struct HomeView: View {
         } message: {
             Text("Long-press your Home Screen → tap + → search Bunk Planner to see attendance and safe bunks at a glance.")
         }
+        .alert("Enjoying Bunk Planner?", isPresented: $reviewPromptCoordinator.shouldPresentDayTwoPrompt) {
+            Button("Rate on App Store") {
+                reviewPromptCoordinator.handleRated()
+            }
+            Button("Not now", role: .cancel) {
+                reviewPromptCoordinator.handleDismissed()
+            }
+        } message: {
+            Text(reviewPromptCoordinator.dayTwoPromptMessage)
+        }
         .confirmationDialog(
             focusPromptTitle,
             isPresented: $showPostMarkFocusPrompt,
@@ -292,11 +289,6 @@ struct HomeView: View {
             }
             .preferredColorScheme(.dark)
         }
-        #if DEBUG
-        .sheet(isPresented: $isShowingDebugTools) {
-            DebugToolsView()
-        }
-        #endif
     }
 
     private func refreshGuidedSetup() {

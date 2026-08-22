@@ -194,6 +194,8 @@ enum AnalyticsEvent {
     case rateUsTapped
     case adPrivacyChoicesOpened
     case reviewPromptShown
+    case dayTwoReviewPromptShown
+    case dayTwoReviewPromptAction(action: String)
 
     // MARK: Pro IAP
     case proPaywallViewed(source: String)
@@ -365,6 +367,8 @@ extension AnalyticsEvent {
         case .rateUsTapped: return "rate_us_tapped"
         case .adPrivacyChoicesOpened: return "ad_privacy_opened"
         case .reviewPromptShown: return "review_prompt_shown"
+        case .dayTwoReviewPromptShown: return "day_two_review_prompt_shown"
+        case .dayTwoReviewPromptAction: return "day_two_review_prompt_action"
 
         case .proPaywallViewed: return "pro_paywall_viewed"
         case .proPriceShown: return "pro_price_shown"
@@ -397,6 +401,7 @@ extension AnalyticsEvent {
              .atRiskSharePromptTapped,
              .siriShortcutsTipShown,
              .rateUsTapped, .adPrivacyChoicesOpened, .reviewPromptShown,
+             .dayTwoReviewPromptShown,
              .settingsOpened, .timetableEditorOpened, .shareCancelled,
              .appOpenAdRequested, .appOpenAdShown,
              .proRestoreStarted, .proRestoreSucceeded, .proRestoreFailed,
@@ -476,6 +481,9 @@ extension AnalyticsEvent {
 
         case let .studentProfileUpdated(source):
             return ["source": source]
+
+        case let .dayTwoReviewPromptAction(action):
+            return ["action": action]
 
         case let .schoolabeSyncSucceeded(subjectCount):
             return ["subject_count": subjectCount]

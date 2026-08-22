@@ -57,6 +57,7 @@ struct ContentView: View {
             // Cold-start app-open: wait until onboarding is dismissed so it doesn't cover the intro.
             if UserDefaults.standard.bool(forKey: "onboarding.didComplete") {
                 AdMobAppOpenService.shared.showAdIfAvailable()
+                AppStoreReviewPromptCoordinator.shared.scheduleDayTwoPromptIfNeeded()
             }
         }
         .onChange(of: showOnboarding) { _, isShowing in
@@ -69,6 +70,7 @@ struct ContentView: View {
                     hasLegacyAttendance: store.subjects.contains(where: { $0.totalClasses > 0 })
                 )
             )
+            AppStoreReviewPromptCoordinator.shared.scheduleDayTwoPromptIfNeeded()
         }
         .onReceive(NotificationCenter.default.publisher(for: .attendanceDataChanged)) { _ in
             subjectStore?.reloadFromExternalChange()
