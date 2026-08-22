@@ -168,12 +168,16 @@ final class ProPurchaseService: ObservableObject {
 #if canImport(StoreKit)
         var unlocked = false
         for await result in Transaction.currentEntitlements {
-            if case .verified(let transaction) = result,
-               transaction.productID == ProPurchaseConfiguration.proProductID,
-               transaction.revocationDate == nil {
-                unlocked = true
-                break
+            guard case .verified(let transaction) = result else { continue }
+            guard ProPurchaseConfiguration.allProProductIDs.contains(transaction.productID) else { continue }
+            guard transaction.revocationDate == nil else { continue }
+            if ProPurchaseConfiguration.legacySubscriptionProductIDs.contains(transaction.productID),
+               let expiration = transaction.expirationDate,
+               expiration <= Date() {
+                continue
             }
+            unlocked = true
+            break
         }
         AdEntitlementsStore.shared.setProUnlocked(unlocked)
         return unlocked
@@ -198,7 +202,13 @@ final class ProPurchaseService: ObservableObject {
         guard case .verified(let transaction) = result else {
             return false
         }
-        guard transaction.productID == ProPurchaseConfiguration.proProductID else {
+        guard ProPurchaseConfiguration.allProProductIDs.contains(transaction.productID) else {
+            await transaction.finish()
+            return false
+        }
+        if ProPurchaseConfiguration.legacySubscriptionProductIDs.contains(transaction.productID),
+           let expiration = transaction.expirationDate,
+           expiration <= Date() {
             await transaction.finish()
             return false
         }

@@ -49,6 +49,7 @@ struct HomeView: View {
     @State private var exportErrorMessage: String?
     @State private var skipPlannerDay: Date?
     @State private var showWidgetPrompt = false
+    @State private var highlightMarkToday = false
     @ObservedObject private var guidedSetup = GuidedSetupStore.shared
     @ObservedObject private var notificationRoute = NotificationRouteStore.shared
 
@@ -169,10 +170,23 @@ struct HomeView: View {
     private func consumeNotificationRoute(_ destination: NotificationRoute?) {
         guard let destination else { return }
         switch destination {
-        case .home, .markToday: selectedTab = .home
-        case .insights: selectedTab = .insights
-        case .log: selectedTab = .log
-        case .overview: selectedTab = .overview
+        case .home:
+            selectedTab = .home
+        case .markToday:
+            selectedTab = .home
+            highlightMarkToday = true
+        case .skipPlanner:
+            selectedTab = .home
+            skipPlannerDay = Calendar.current.startOfDay(for: Date())
+            AnalyticsService.shared.log(.skipPlannerViewed(dayCount: subjectStore.subjectsForMarkToday(on: Date()).count))
+        case .tools:
+            selectedTab = .tools
+        case .insights:
+            selectedTab = .insights
+        case .log:
+            selectedTab = .log
+        case .overview:
+            selectedTab = .overview
         }
         notificationRoute.clear()
         AnalyticsService.shared.log(.notificationDeepLinkOpened(destination: destination.rawValue))
@@ -422,49 +436,63 @@ struct HomeView: View {
 
     private var homeTabContent: some View {
         phoneScrollWithFABInset {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 20) {
-                    compactHeaderSection
-                    if let progress = SemesterSettings.progress() {
-                        SemesterProgressStrip(progress: progress)
-                    }
-                    if let step = guidedSetup.activeStep {
-                        GuidedSetupBanner(step: step) {
-                            guidedSetup.complete()
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 20) {
+                        compactHeaderSection
+                        if let progress = SemesterSettings.progress() {
+                            SemesterProgressStrip(progress: progress)
+                        }
+                        if let step = guidedSetup.activeStep {
+                            GuidedSetupBanner(step: step) {
+                                guidedSetup.complete()
+                            }
+                        }
+                        subjectPickerChip
+
+                        MarkTodayCard(
+                            subjectStore: subjectStore,
+                            isHighlighted: highlightMarkToday,
+                            onCelebrated: {
+                                refreshGuidedSetup()
+                                maybeShowWidgetPrompt()
+                            },
+                            onAddSubject: { isShowingSubjects = true }
+                        )
+                        .id("markTodayCard")
+
+                        upcomingExamAttendanceWarning
+
+                        AdMobBannerCard(
+                            placement: AdMobConfiguration.Placement.home,
+                            isActive: selectedTab == .home
+                        )
+
+                        // Calculator sits under Today's Classes + banner.
+                        inputSection
+
+                        if hasAttendanceData {
+                            assistantHeroSection
+                            proUpsellCard
+                            scenariosDisclosure
                         }
                     }
-                    subjectPickerChip
-
-                    MarkTodayCard(
-                        subjectStore: subjectStore,
-                        onCelebrated: {
-                            refreshGuidedSetup()
-                            maybeShowWidgetPrompt()
-                        },
-                        onAddSubject: { isShowingSubjects = true }
-                    )
-
-                    upcomingExamAttendanceWarning
-
-                    AdMobBannerCard(
-                        placement: AdMobConfiguration.Placement.home,
-                        isActive: selectedTab == .home
-                    )
-
-                    // Calculator sits under Today's Classes + banner.
-                    inputSection
-
-                    if hasAttendanceData {
-                        assistantHeroSection
-                        proUpsellCard
-                        scenariosDisclosure
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 24)
+                    .padding(.bottom, tabScrollBottomPadding)
+                    .frame(maxWidth: isRegularWidth ? 920 : .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                }
+                .onChange(of: highlightMarkToday) { _, highlighted in
+                    guard highlighted else { return }
+                    withAnimation(.easeInOut(duration: 0.45)) {
+                        proxy.scrollTo("markTodayCard", anchor: .center)
+                    }
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 3_500_000_000)
+                        highlightMarkToday = false
                     }
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 24)
-                .padding(.bottom, tabScrollBottomPadding)
-                .frame(maxWidth: isRegularWidth ? 920 : .infinity, alignment: .leading)
-                .frame(maxWidth: .infinity, alignment: .center)
             }
         }
     }
@@ -594,6 +622,31 @@ struct HomeView: View {
                     )
                         .font(.system(size: 13, weight: .medium, design: .rounded))
                         .foregroundStyle(.white.opacity(0.65))
+
+                    if atRisk {
+                        Button {
+                            triggerLightHaptic()
+                            AnalyticsService.shared.log(
+                                .proCtaTapped(surface: "at_risk_home", action: "skip_planner")
+                            )
+                            skipPlannerDay = Calendar.current.startOfDay(for: Date())
+                            AnalyticsService.shared.log(.skipPlannerViewed(dayCount: subjectStore.subjectsForMarkToday(on: Date()).count))
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "calendar.badge.checkmark")
+                                Text("Plan skips free")
+                                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                            }
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(
+                                Capsule(style: .continuous)
+                                    .stroke(Color.white.opacity(0.35), lineWidth: 1)
+                            )
+                        }
+                        .buttonStyle(PressableButtonStyle())
+                    }
 
                     Button {
                         triggerLightHaptic()
@@ -1540,6 +1593,23 @@ struct HomeView: View {
                 .font(.system(size: 13, weight: .semibold, design: .rounded))
                 .foregroundStyle(.white.opacity(0.8))
 
+            if let preview = lockedForecastPreviewLine {
+                HStack(spacing: 8) {
+                    Image(systemName: "chart.line.uptrend.xyaxis")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(Color(red: 0.32, green: 0.84, blue: 1.0))
+                    Text(preview)
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.92))
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.white.opacity(0.08))
+                )
+            }
+
             Button {
                 triggerLightHaptic()
                 AnalyticsService.shared.log(
@@ -1587,6 +1657,20 @@ struct HomeView: View {
             AnalyticsService.shared.log(.lockedForecastViewed)
             AnalyticsService.shared.logProCtaShownOnce(surface: "locked_forecast")
         }
+    }
+
+    private var lockedForecastPreviewLine: String? {
+        guard subjectStore.subjects.isEmpty == false else { return nil }
+        let avg = Int(subjectStore.dashboardSummary.averageAttendance.rounded())
+        if let worst = subjectStore.dashboardSummary.mostAtRiskSubject {
+            let pct = Int(worst.currentPercentage.rounded())
+            let req = Int(worst.requiredPercentage.rounded())
+            if pct < req {
+                return "\(worst.name): \(pct)% now · need \(req)% — Pro shows the path."
+            }
+            return "\(worst.name): \(pct)% · class avg \(avg)%."
+        }
+        return "Class average: \(avg)% today."
     }
 
     private var forecastDetailCard: some View {
@@ -3593,17 +3677,47 @@ struct HomeView: View {
 
     private func floatingActionBanner(for result: AttendanceResult?) -> some View {
         let copy = contextualFABCopy(for: result)
-        return ResultCardView(
-            title: copy.title,
-            value: copy.value,
-            subtitle: copy.subtitle,
-            tint: copy.tint,
-            alignment: .center,
-            isEmphasized: true
-        )
-        .shadow(color: Color.black.opacity(0.45), radius: 18, x: 0, y: 8)
+        return Button {
+            triggerLightHaptic()
+            handleFloatingBannerAction(copy: copy, result: result)
+        } label: {
+            ResultCardView(
+                title: copy.title,
+                value: copy.value,
+                subtitle: copy.subtitle,
+                tint: copy.tint,
+                alignment: .center,
+                isEmphasized: true
+            )
+            .shadow(color: Color.black.opacity(0.45), radius: 18, x: 0, y: 8)
+        }
+        .buttonStyle(PressableButtonStyle())
         .onAppear {
             AnalyticsService.shared.log(.fabBannerShown(action: copy.analytics))
+        }
+    }
+
+    private func handleFloatingBannerAction(copy: (title: String, value: String, subtitle: String, tint: Color, analytics: String), result: AttendanceResult?) {
+        AnalyticsService.shared.log(.fabBannerShown(action: "\(copy.analytics)_tap"))
+        switch copy.analytics {
+        case "log_morning", "log_evening", "log_today":
+            selectedTab = .home
+            highlightMarkToday = true
+        case "start_recovery", "skip_plan":
+            skipPlannerDay = Calendar.current.startOfDay(for: Date())
+            AnalyticsService.shared.log(.skipPlannerViewed(dayCount: subjectStore.subjectsForMarkToday(on: Date()).count))
+        case "create_subject":
+            isShowingSubjects = true
+        case "maintain_streak":
+            selectedTab = .insights
+        default:
+            if result?.status == .risk {
+                skipPlannerDay = Calendar.current.startOfDay(for: Date())
+                AnalyticsService.shared.log(.skipPlannerViewed(dayCount: subjectStore.subjectsForMarkToday(on: Date()).count))
+            } else {
+                selectedTab = .home
+                highlightMarkToday = true
+            }
         }
     }
 

@@ -23,7 +23,7 @@ final class SoftPaywallCoordinator: ObservableObject {
     static let habitValueMinDays = 1
     #else
     static let streakThreshold = 7
-    static let cooldownHours: Double = 10 * 24
+    static let cooldownHours: Double = 5 * 24
     /// Earliest day to auto-show habit paywall (after first value, not install day).
     static let habitValueMinDays = 5
     #endif
@@ -99,7 +99,8 @@ final class SoftPaywallCoordinator: ObservableObject {
         guard AdEntitlementsStore.shared.isPro == false else { return }
         guard atRiskWeekCount >= 1 else { return }
         guard cooldownElapsed else { return }
-        queue(source: "at_risk_week")
+        let source = atRiskWeekCount >= 3 ? "at_risk_week_3" : "at_risk_week"
+        queue(source: source)
     }
 
     func shouldPresentStreakPaywall(streak: Int) -> Bool {

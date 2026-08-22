@@ -37,6 +37,9 @@ enum NotificationCooldownStore {
         let priority = category.priority
 
         if slot != .immediate {
+            guard NotificationEngagementStore.canSendHabitNotification(now: now, calendar: calendar) else {
+                return false
+            }
             // Habit slots are the planned 1–2/day. Allow them even if an
             // immediate warning already fired, unless this category is cooling down.
             return categoryCooldownElapsed(category, records: records, now: now)

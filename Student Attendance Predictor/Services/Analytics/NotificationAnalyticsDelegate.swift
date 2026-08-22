@@ -33,6 +33,7 @@ final class NotificationAnalyticsDelegate: NSObject, UNUserNotificationCenterDel
         if identifier.hasPrefix("focus-timer") { return "focus_timer" }
         if identifier == "pro-weekly-digest" { return "weekly_digest" }
         if identifier == "retention-day2-mark" { return "day2_mark" }
+        if identifier == "retention-evening-mark" { return "evening_mark" }
         return "other"
     }
 
@@ -66,6 +67,7 @@ final class NotificationAnalyticsDelegate: NSObject, UNUserNotificationCenterDel
         }
 
         AnalyticsService.shared.handleNotificationOpened(type: type)
+        NotificationEngagementStore.recordOpened()
         if let category = userInfo["category"] as? String,
            let templateID = userInfo["template_id"] as? String {
             let variant = userInfo["variant"] as? String ?? "a"

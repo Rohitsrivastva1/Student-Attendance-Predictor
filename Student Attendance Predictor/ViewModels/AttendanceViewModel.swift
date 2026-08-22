@@ -797,6 +797,11 @@ final class SubjectStore: ObservableObject {
         }
         lastHabitReminderSignature = context.schedulingSignature
         NotificationService.reschedulePersonalityReminders(context: context)
+        NotificationService.scheduleEveningMarkNudgeIfNeeded(
+            hasMarkedToday: context.hasLoggedToday,
+            hasSubjects: subjects.isEmpty == false,
+            pendingMarkCount: subjectsForMarkToday(on: Date()).count
+        )
     }
 
     func makeNotificationContext(focus: SubjectSummary? = nil) -> NotificationContext {

@@ -250,6 +250,7 @@ final class AnalyticsService {
         guard defaults.bool(forKey: Keys.didLogFirstMark) == false else { return }
         defaults.set(true, forKey: Keys.didLogFirstMark)
         NotificationService.cancelDayTwoMarkNudge()
+        NotificationService.cancelEveningMarkNudge()
         log(.markTodayFirstUse)
     }
 

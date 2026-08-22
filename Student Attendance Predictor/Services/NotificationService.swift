@@ -29,8 +29,12 @@ enum NotificationService {
 
         let content = UNMutableNotificationContent()
         content.title = "\(subjectName): Attendance Alert"
-        content.body = "Your attendance is \(String(format: "%.1f", currentPercentage))% — attend next \(recoveryNeeded) classes."
+        content.body = "Your attendance is \(String(format: "%.1f", currentPercentage))% — tap to plan which classes you can skip."
         content.sound = .default
+        content.userInfo = [
+            "type": "risk",
+            "deep_link": NotificationRoute.skipPlanner.rawValue
+        ]
 
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 3, repeats: false)
         let request = UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
@@ -52,9 +56,13 @@ enum NotificationService {
         let content = UNMutableNotificationContent()
         content.title = "\(subjectName): Low Attendance Buffer"
         content.body = bunkAllowed > 0
-            ? "You can safely skip \(bunkAllowed) class\(bunkAllowed == 1 ? "" : "es") next week — stay mindful."
-            : "Current attendance is \(String(format: "%.1f", currentPercentage))%. You can miss only \(max(0, bunkAllowed)) more classes safely."
+            ? "You can safely skip \(bunkAllowed) class\(bunkAllowed == 1 ? "" : "es") — tap to plan."
+            : "Attendance is \(String(format: "%.1f", currentPercentage))%. Tap to see your recovery path."
         content.sound = .default
+        content.userInfo = [
+            "type": "low_buffer",
+            "deep_link": NotificationRoute.skipPlanner.rawValue
+        ]
 
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 5, repeats: false)
         let request = UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
@@ -181,12 +189,60 @@ enum NotificationService {
         )
         let request = UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
         center.add(request)
+        NotificationEngagementStore.recordScheduled()
         AnalyticsService.shared.log(.notificationScheduled(type: "day2_mark"))
     }
 
     static func cancelDayTwoMarkNudge() {
         UNUserNotificationCenter.current()
             .removePendingNotificationRequests(withIdentifiers: ["retention-day2-mark"])
+    }
+
+    /// Same-day nudge when the user has data but hasn't marked today (8 PM local).
+    static func scheduleEveningMarkNudgeIfNeeded(
+        hasMarkedToday: Bool,
+        hasSubjects: Bool,
+        pendingMarkCount: Int
+    ) {
+        let center = UNUserNotificationCenter.current()
+        let identifier = "retention-evening-mark"
+        center.removePendingNotificationRequests(withIdentifiers: [identifier])
+
+        let notificationsEnabled = UserDefaults.standard.object(forKey: "feature.notificationsEnabled") as? Bool ?? true
+        guard notificationsEnabled else { return }
+        guard hasSubjects else { return }
+        guard hasMarkedToday == false else { return }
+        guard AnalyticsService.shared.hasMarkedAtLeastOnce else { return }
+
+        let calendar = Calendar.current
+        let now = Date()
+        var fireComponents = calendar.dateComponents([.year, .month, .day], from: now)
+        fireComponents.hour = NotificationPersonalityConfig.eveningHour
+        fireComponents.minute = 0
+        guard let fireDate = calendar.date(from: fireComponents), fireDate > now else { return }
+
+        let pending = max(1, pendingMarkCount)
+        let content = UNMutableNotificationContent()
+        content.title = pending > 1 ? "Mark \(pending) subjects before bed?" : "Mark today's class?"
+        content.body = "One tap in Bunk Planner — keep your streak and safe-bunk count accurate."
+        content.sound = .default
+        content.userInfo = [
+            "type": "evening_mark",
+            "deep_link": NotificationRoute.markToday.rawValue
+        ]
+
+        let trigger = UNCalendarNotificationTrigger(
+            dateMatching: calendar.dateComponents([.year, .month, .day, .hour, .minute], from: fireDate),
+            repeats: false
+        )
+        center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: trigger))
+        NotificationEngagementStore.recordScheduled()
+        AnalyticsService.shared.log(.notificationScheduled(type: "evening_mark"))
+    }
+
+    static func cancelEveningMarkNudge() {
+        UNUserNotificationCenter.current()
+            .removePendingNotificationRequests(withIdentifiers: ["retention-evening-mark"])
     }
 
     static func scheduleHolidayWeekHint() {
@@ -492,6 +548,7 @@ enum NotificationService {
 
         let request = UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
         UNUserNotificationCenter.current().add(request)
+        NotificationEngagementStore.recordScheduled()
         NotificationCooldownStore.record(payload: payload, on: fireDate, reserved: reserved)
         // Reserved habit slots are rebuilt often — log only immediate sends.
         guard reserved == false else { return }
