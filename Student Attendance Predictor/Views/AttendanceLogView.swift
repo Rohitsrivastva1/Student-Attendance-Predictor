@@ -13,7 +13,10 @@ import SwiftUI
 /// stays available so bulk days don’t require N swipes.
 struct MarkTodayCard: View {
     @ObservedObject var subjectStore: SubjectStore
+    var isHighlighted: Bool = false
     var onCelebrated: (() -> Void)? = nil
+    /// Fires when every subject scheduled today has been marked (optional focus prompt).
+    var onAllSubjectsMarkedToday: ((SubjectSummary?) -> Void)? = nil
     var onAddSubject: (() -> Void)? = nil
 
     @State private var showCelebration = false
@@ -124,12 +127,18 @@ struct MarkTodayCard: View {
                             .stroke(
                                 showCelebration
                                     ? attendedTint.opacity(0.55)
-                                    : Color.white.opacity(0.12),
-                                lineWidth: showCelebration ? 1.5 : 1
+                                    : isHighlighted
+                                        ? accentTint.opacity(0.85)
+                                        : Color.white.opacity(0.12),
+                                lineWidth: showCelebration || isHighlighted ? 2 : 1
                             )
                     )
             )
-            .scaleEffect(celebratePulse ? 1.02 : 1.0)
+            .scaleEffect(isHighlighted && celebratePulse == false ? 1.015 : (celebratePulse ? 1.02 : 1.0))
+            .animation(
+                isHighlighted ? .easeInOut(duration: 0.85).repeatForever(autoreverses: true) : .default,
+                value: isHighlighted
+            )
 
             if showCelebration {
                 CelebrationBurst(isActive: showCelebration)
@@ -152,6 +161,9 @@ struct MarkTodayCard: View {
             didDiscoverPaging = UserDefaults.standard.bool(forKey: didDiscoverPagingKey)
             ensureSelection()
             startNudgeIfNeeded()
+        }
+        .onChange(of: isHighlighted) { _, on in
+            if on { startNudgeIfNeeded() }
         }
         .onChange(of: subjectsToday.map(\.id)) { _, _ in
             ensureSelection()
@@ -496,6 +508,10 @@ struct MarkTodayCard: View {
 
     private func triggerCelebration() {
         onCelebrated?()
+        if unmarkedSubjects.isEmpty, subjectsToday.isEmpty == false {
+            let lastMarked = subjectsToday.first { subjectStore.logEntry(subjectID: $0.id, date: today) != nil }
+            onAllSubjectsMarkedToday?(lastMarked ?? subjectsToday.first)
+        }
         withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
             showCelebration = true
             celebratePulse = true

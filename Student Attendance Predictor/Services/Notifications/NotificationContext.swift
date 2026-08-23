@@ -20,6 +20,7 @@ struct NotificationContext: Equatable {
     var safeBunks: Int
     var recoveryNeeded: Int
     var subjectName: String
+    var firstName: String
     var skipVerb: String
     var skipNoun: String
     var classesToday: Int
@@ -64,6 +65,7 @@ struct NotificationContext: Equatable {
             "\(safeBunks)",
             "\(recoveryNeeded)",
             subjectName,
+            firstName,
             hasLoggedToday ? "1" : "0",
             "\(classesToday)",
             NotificationPersonalityConfig.enableWittyCopy ? "w" : "p",
@@ -73,13 +75,17 @@ struct NotificationContext: Equatable {
     }
 
     func interpolations() -> [String: String] {
-        [
+        let name = firstName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return [
             "attendance_percentage": "\(roundedPercent)%",
             "required_percentage": "\(roundedRequired)%",
             "safe_bunks": "\(max(0, safeBunks))",
             "recovery_needed": "\(max(0, recoveryNeeded))",
             "classes_today": "\(max(0, classesToday))",
             "subject_name": shortSubjectName,
+            "first_name": name,
+            "name_comma": name.isEmpty ? "" : "\(name), ",
+            "name_hey": name.isEmpty ? "Hey" : "Hey \(name)",
             "skip_verb": skipVerb,
             "skip_noun": skipNoun,
             "skip_verb_title": skipVerbTitle,
@@ -112,7 +118,14 @@ enum NotificationCopyRenderer {
         for (key, value) in context.interpolations() {
             result = result.replacingOccurrences(of: "{\(key)}", with: value)
         }
-        return collapseSpaces(result)
+        result = collapseSpaces(result)
+        return cleanupOptionalNamePlaceholders(result)
+    }
+
+    static func renderedCopy(title: String, body: String, context: NotificationContext) -> (title: String, body: String) {
+        let renderedTitle = render(title, context: context)
+        let renderedBody = render(body, context: context)
+        return NotificationPersonalization.apply(title: renderedTitle, body: renderedBody, firstName: context.firstName)
     }
 
     static func maybeStripEmoji(_ text: String, keep: Bool) -> String {
@@ -124,6 +137,19 @@ enum NotificationCopyRenderer {
             return true
         }
         return collapseSpaces(String(String.UnicodeScalarView(filtered)))
+    }
+
+    private static func cleanupOptionalNamePlaceholders(_ text: String) -> String {
+        var result = text
+            .replacingOccurrences(of: "Hey ,", with: "Hey,")
+            .replacingOccurrences(of: "Hey  ", with: "Hey ")
+            .replacingOccurrences(of: ", ,", with: ",")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let first = result.first, first.isLowercase {
+            result = first.uppercased() + result.dropFirst()
+        }
+        return result
     }
 
     private static func collapseSpaces(_ text: String) -> String {

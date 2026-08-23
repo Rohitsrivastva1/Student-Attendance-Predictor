@@ -503,6 +503,13 @@ final class SubjectStore: ObservableObject {
             NotificationService.scheduleDayTwoMarkNudgeIfNeeded()
             publishWidgetSnapshot()
         }
+        NotificationCenter.default.addObserver(
+            forName: .studentProfileDidUpdate,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.rescheduleHabitReminders(force: true)
+        }
     }
 
     /// Reload after Siri, Shortcuts, or Live Activity marks while the app is open.
@@ -548,6 +555,7 @@ final class SubjectStore: ObservableObject {
         AnalyticsService.shared.log(.subjectAdded(totalSubjects: subjects.count))
         AnalyticsUserProfile.sync(subjectStore: self)
         GuidedSetupStore.shared.subjectWasAdded()
+        SchoolabeSyncService.shared.scheduleSync(subjectStore: self)
         return true
     }
 
@@ -568,6 +576,7 @@ final class SubjectStore: ObservableObject {
             }
             AnalyticsService.shared.log(.subjectDeleted(totalSubjects: subjects.count))
             AnalyticsUserProfile.sync(subjectStore: self)
+            SchoolabeSyncService.shared.scheduleSync(subjectStore: self)
         }
     }
 
@@ -588,6 +597,7 @@ final class SubjectStore: ObservableObject {
             }
             AnalyticsService.shared.log(.subjectDeleted(totalSubjects: subjects.count))
             AnalyticsUserProfile.sync(subjectStore: self)
+            SchoolabeSyncService.shared.scheduleSync(subjectStore: self)
         }
     }
 
@@ -797,6 +807,11 @@ final class SubjectStore: ObservableObject {
         }
         lastHabitReminderSignature = context.schedulingSignature
         NotificationService.reschedulePersonalityReminders(context: context)
+        NotificationService.scheduleEveningMarkNudgeIfNeeded(
+            hasMarkedToday: context.hasLoggedToday,
+            hasSubjects: subjects.isEmpty == false,
+            pendingMarkCount: subjectsForMarkToday(on: Date()).count
+        )
     }
 
     func makeNotificationContext(focus: SubjectSummary? = nil) -> NotificationContext {
@@ -827,12 +842,14 @@ final class SubjectStore: ObservableObject {
         }
 
         let hasData = (subject?.totalClasses ?? 0) > 0
+        let firstName = NotificationPersonalization.firstName(defaults: defaults)
         return NotificationContext(
             attendancePercentage: subject?.currentPercentage ?? 0,
             requiredPercentage: subject?.requiredPercentage ?? calculator.defaultRequiredPercentage,
             safeBunks: subject?.status == .safe ? (subject?.bunkAllowed ?? 0) : 0,
             recoveryNeeded: subject?.status == .risk ? (subject?.recoveryNeeded ?? 0) : 0,
             subjectName: subject?.name ?? "Bunk Planner",
+            firstName: firstName,
             skipVerb: market.skipVerb,
             skipNoun: market.skipNounPlural,
             classesToday: subjects.reduce(0) { $0 + classesScheduledToday(for: $1.id, on: today) },

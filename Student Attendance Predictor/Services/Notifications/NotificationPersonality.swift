@@ -32,14 +32,14 @@ enum PersonalityNotificationCategory: String, CaseIterable, Codable {
 
     var route: NotificationRoute {
         switch self {
-        case .bunkAvailable, .bunkNotAvailable, .lowAttendance, .attendanceWarning:
-            return .home
-        case .classReminder:
+        case .bunkAvailable, .lowAttendance, .attendanceWarning:
+            return .skipPlanner
+        case .bunkNotAvailable, .classReminder:
             return .markToday
         case .streak:
             return .insights
         case .funny, .curiosity, .savage:
-            return .home
+            return .markToday
         }
     }
 }
@@ -64,6 +64,8 @@ enum NotificationRoute: String, Codable {
     case log
     case overview
     case markToday = "mark_today"
+    case skipPlanner = "skip_planner"
+    case tools
 }
 
 struct PersonalityNotificationPayload: Equatable {

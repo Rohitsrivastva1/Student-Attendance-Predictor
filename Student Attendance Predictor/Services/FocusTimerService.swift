@@ -145,6 +145,11 @@ final class FocusTimerService: ObservableObject {
         }
     }
 
+    func tagSubject(id: UUID?, name: String?) {
+        taggedSubjectID = id
+        taggedSubjectName = name?.isEmpty == false ? name : nil
+    }
+
     func startOrResume() {
         if phase == .idle {
             phase = .focus

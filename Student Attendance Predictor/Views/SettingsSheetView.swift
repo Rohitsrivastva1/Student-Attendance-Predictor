@@ -10,6 +10,7 @@ import UIKit
 
 struct SettingsSheetView: View {
     @ObservedObject var viewModel: AttendanceViewModel
+    @ObservedObject var subjectStore: SubjectStore
     @Environment(\.dismiss) private var dismiss
     @State private var defaultRequiredPercentage: String
     @State private var selectedMarket: StudentMarket
@@ -17,15 +18,21 @@ struct SettingsSheetView: View {
     @State private var adPrivacyErrorMessage: String?
     @State private var showAdPrivacyChoices = false
     @State private var isShowingProPaywall = false
+    @State private var isShowingProfileEditor = false
+    @State private var showRemoveUserDataConfirmation = false
+    @State private var isRemovingUserData = false
+    @State private var removeUserDataErrorMessage: String?
     @ObservedObject private var entitlements = AdEntitlementsStore.shared
     @AppStorage("feature.notificationsEnabled") private var notificationsEnabled = true
     @AppStorage("feature.wittyNotificationsEnabled") private var wittyNotificationsEnabled = true
-    
-    private let appStoreID = "6761951427"
+    @AppStorage("prompt.siriShortcutsTipDismissed") private var siriShortcutsTipDismissed = false
+    @State private var didLogSiriTipShown = false
+
     private let proGold = Color(red: 1.0, green: 0.78, blue: 0.28)
 
-    init(viewModel: AttendanceViewModel) {
+    init(viewModel: AttendanceViewModel, subjectStore: SubjectStore) {
         self.viewModel = viewModel
+        self.subjectStore = subjectStore
         _defaultRequiredPercentage = State(
             initialValue: SettingsSheetView.formattedPercentage(viewModel.defaultRequiredPercentage)
         )
@@ -102,29 +109,40 @@ struct SettingsSheetView: View {
                     Text("Pro")
                 }
 
-                #if DEBUG
-                Section {
+                Section("About you") {
                     Button {
-                        entitlements.setProUnlocked(!entitlements.isPro)
+                        isShowingProfileEditor = true
                     } label: {
                         HStack {
-                            Label(
-                                entitlements.isPro ? "Disable Pro (Debug)" : "Enable Pro (Debug)",
-                                systemImage: entitlements.isPro ? "crown.fill" : "crown"
-                            )
+                            Label("Student profile", systemImage: "person.crop.circle")
                             Spacer()
-                            Text(entitlements.isPro ? "ON" : "OFF")
-                                .font(.system(size: 12, weight: .bold, design: .rounded))
-                                .foregroundStyle(entitlements.isPro ? .green : .secondary)
+                            Text(profileSummaryLabel)
+                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.secondary)
                         }
                     }
-                    Text("DEBUG builds only. Toggles Pro without StoreKit.")
+
+                    Text("Used to improve Bunk Planner — name, class, college, and subject names you create.")
                         .font(.system(size: 12, weight: .medium, design: .rounded))
                         .foregroundStyle(.secondary)
-                } header: {
-                    Text("Debug")
+
+                    Button(role: .destructive) {
+                        showRemoveUserDataConfirmation = true
+                    } label: {
+                        HStack {
+                            Label("Remove my data", systemImage: "trash")
+                            Spacer()
+                            if isRemovingUserData {
+                                ProgressView()
+                            }
+                        }
+                    }
+                    .disabled(isRemovingUserData)
                 }
-                #endif
 
                 Section("Defaults") {
                     VStack(alignment: .leading, spacing: 8) {
@@ -224,6 +242,32 @@ struct SettingsSheetView: View {
                     }
                 }
 
+                if siriShortcutsTipDismissed == false,
+                   AnalyticsService.shared.currentStreakDays >= 3 {
+                    Section("Siri & Shortcuts") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label("Mark hands-free", systemImage: "waveform")
+                                .font(.system(size: 15, weight: .bold, design: .rounded))
+                            Text("Say “Hey Siri, mark all attended in Bunk Planner” or ask for your safest skip day this week.")
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .foregroundStyle(.secondary)
+                            Text("Open the Shortcuts app → Bunk Planner to pin actions to your Lock Screen.")
+                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 4)
+
+                        Button("Got it") {
+                            siriShortcutsTipDismissed = true
+                        }
+                    }
+                    .onAppear {
+                        guard didLogSiriTipShown == false else { return }
+                        didLogSiriTipShown = true
+                        AnalyticsService.shared.log(.siriShortcutsTipShown)
+                    }
+                }
+
                 Section("Automation") {
                     Toggle("Risk Notifications", isOn: $notificationsEnabled)
                         .onChange(of: notificationsEnabled) { _, enabled in
@@ -285,7 +329,7 @@ struct SettingsSheetView: View {
                         openRateUsFlow()
                     }
                     
-                    Text("This opens the App Store review page where ratings submit reliably.")
+                    Text("Opens the App Store review page for Bunk Planner (or the in-app rating prompt if the store app is unavailable).")
                         .font(.system(size: 12, weight: .medium, design: .rounded))
                         .foregroundStyle(.secondary)
                 }
@@ -303,6 +347,9 @@ struct SettingsSheetView: View {
                     .preferredColorScheme(.dark)
                     .analyticsScreen(.proPaywall)
             }
+            .sheet(isPresented: $isShowingProfileEditor) {
+                StudentProfileEditorView(subjectStore: subjectStore)
+            }
             .alert("Ad Privacy", isPresented: Binding(
                 get: { adPrivacyErrorMessage != nil },
                 set: { isPresented in
@@ -314,6 +361,26 @@ struct SettingsSheetView: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(adPrivacyErrorMessage ?? "")
+            }
+            .alert("Remove my data?", isPresented: $showRemoveUserDataConfirmation) {
+                Button("Remove", role: .destructive) {
+                    Task { await removeUserDataFromSchoolabe() }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Clears your profile on this device and tells Schoolabe to mark your synced data as removed. Your attendance marks on this phone stay.")
+            }
+            .alert("Could not remove data", isPresented: Binding(
+                get: { removeUserDataErrorMessage != nil },
+                set: { isPresented in
+                    if isPresented == false {
+                        removeUserDataErrorMessage = nil
+                    }
+                }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(removeUserDataErrorMessage ?? "")
             }
             .alert("Unable to Open App Store", isPresented: Binding(
                 get: { rateErrorMessage != nil },
@@ -335,6 +402,17 @@ struct SettingsSheetView: View {
                 }
             }
         }
+    }
+
+    private var profileSummaryLabel: String {
+        let profile = StudentProfileStore.shared.profile
+        if profile.name.isEmpty == false {
+            return profile.name
+        }
+        if StudentProfileStore.shared.didCompleteProfileStep {
+            return "Not provided"
+        }
+        return "Add details"
     }
 
     private func saveDefault() {
@@ -381,20 +459,29 @@ struct SettingsSheetView: View {
         }
     }
 
+    private func removeUserDataFromSchoolabe() async {
+        guard isRemovingUserData == false else { return }
+        isRemovingUserData = true
+        defer { isRemovingUserData = false }
+
+        do {
+            try await SchoolabeSyncService.shared.deleteUserData()
+            StudentProfileStore.shared.clearLocalProfile()
+            subjectStore.rescheduleHabitReminders(force: true)
+        } catch {
+            removeUserDataErrorMessage = error.localizedDescription
+            AnalyticsService.shared.log(.userDataRemoveFailed(reason: String(describing: error).prefix(80).description))
+        }
+    }
+
     private func openRateUsFlow() {
         AnalyticsService.shared.log(.rateUsTapped)
-        #if canImport(UIKit)
-        // Official StoreKit deep link. Prefer https://apps.apple.com (not itunes.apple.com).
-        // Do not use canOpenURL(itms-apps:) — without LSApplicationQueriesSchemes it
-        // returns false and falsely shows "App Store is not available".
-        guard let url = URL(string: "https://apps.apple.com/app/id\(appStoreID)?action=write-review") else {
-            rateErrorMessage = "Could not create App Store review URL."
-            return
+        Task { @MainActor in
+            let opened = await AppStoreReviewOpener.openWriteReview()
+            if opened == false {
+                rateErrorMessage = "Could not open the App Store. Search for “Bunk Planner” in the App Store to leave a review."
+            }
         }
-        UIApplication.shared.open(url)
-        #else
-        rateErrorMessage = "App Store review is available on iOS only."
-        #endif
     }
 
     private static func formattedPercentage(_ value: Double) -> String {
@@ -406,5 +493,5 @@ struct SettingsSheetView: View {
 }
 
 #Preview {
-    SettingsSheetView(viewModel: AttendanceViewModel())
+    SettingsSheetView(viewModel: AttendanceViewModel(), subjectStore: SubjectStore())
 }

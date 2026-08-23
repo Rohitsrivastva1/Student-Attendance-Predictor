@@ -45,15 +45,19 @@ enum AnalyticsUserProfile {
     static func recordDayMarked(source: String) {
         AnalyticsService.shared.recordWeeklyActiveDay()
         AnalyticsService.shared.checkRetentionMilestones()
+        AnalyticsService.shared.recordFirstMarkIfNeeded()
 
         // Mark Today logs `mark_today_multi` (pager / mark-all). A strict
         // `mark_today` match dropped almost every first-use event.
         if source.hasPrefix("mark_today") {
-            AnalyticsService.shared.recordFirstMarkIfNeeded()
             GuidedSetupStore.shared.complete()
         }
         if source == "day_editor" {
             AnalyticsService.shared.log(.logDayEdited)
+        }
+
+        Task { @MainActor in
+            WidgetPromptCoordinator.shared.evaluateAfterMark()
         }
     }
 

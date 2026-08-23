@@ -220,7 +220,7 @@ private final class AdMobBannerHostViewController: UIViewController, BannerViewD
     private var loadedWidth: CGFloat = 0
     private var retryCount = 0
     private var isCurrentLoadARetry = false
-    private let maxQuickRetries = 1
+    private let maxQuickRetries = 2
     /// Ignore flick-through tab switches before spending a network request.
     private let dwellBeforeRequestNanoseconds: UInt64 = 1_500_000_000
     /// Backoff when inventory returns no-fill (GAD error code 3).
@@ -380,6 +380,7 @@ private final class AdMobBannerHostViewController: UIViewController, BannerViewD
 
         guard await AdMobService.ensureReadyForAds() else {
             isWaitingForSDKReady = true
+            hasRequested = false
             if didLogConsentSkip == false {
                 didLogConsentSkip = true
                 AnalyticsService.shared.log(

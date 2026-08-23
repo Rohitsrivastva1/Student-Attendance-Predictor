@@ -30,6 +30,13 @@ struct ProPaywallView: View {
     @State private var didLogPriceShown = false
     @State private var didLogDismiss = false
     @State private var didPurchaseSucceed = false
+    @State private var lastFailureWasRestore = false
+
+    private var purchaseAlertTitle: String {
+        lastFailureWasRestore ? "Restore Purchases" : "Purchase"
+    }
+
+    private var isRestoreFailure: Bool { lastFailureWasRestore }
 
     private let cyan = Color(red: 0.32, green: 0.84, blue: 1.0)
     private let gold = Color(red: 1.0, green: 0.78, blue: 0.28)
@@ -85,13 +92,13 @@ struct ProPaywallView: View {
             AnalyticsService.shared.log(.proPaywallViewed(source: source))
             ProPurchaseService.shared.start()
             Task {
-                await purchaseService.loadProduct(surfaceFailure: false)
+                await purchaseService.loadProduct(surfaceFailure: true)
                 if purchaseService.isAvailable {
                     logPriceShownIfNeeded()
                 } else {
                     try? await Task.sleep(nanoseconds: 1_500_000_000)
-                    await purchaseService.loadProduct(surfaceFailure: false)
-                    logPriceShownIfNeeded(forceUnavailable: true)
+                    await purchaseService.loadProduct(surfaceFailure: true)
+                    logPriceShownIfNeeded(forceUnavailable: purchaseService.isAvailable == false)
                 }
             }
             withAnimation(.easeOut(duration: 0.7)) { appearHero = true }
@@ -116,7 +123,7 @@ struct ProPaywallView: View {
             }
         }
         .alert(
-            "Purchase",
+            purchaseAlertTitle,
             isPresented: Binding(
                 get: {
                     if case .failed = purchaseService.phase { return true }
@@ -129,6 +136,14 @@ struct ProPaywallView: View {
                 }
             )
         ) {
+            if isRestoreFailure == false {
+                Button("Try Again") {
+                    Task { await retryPurchase() }
+                }
+            }
+            Button("Restore Purchases") {
+                Task { await restorePurchases() }
+            }
             Button("OK", role: .cancel) {}
         } message: {
             if case let .failed(message) = purchaseService.phase {
@@ -578,7 +593,15 @@ struct ProPaywallView: View {
         }
     }
 
+    private func retryPurchase() async {
+        lastFailureWasRestore = false
+        purchaseService.clearTransientError()
+        await purchaseService.loadProduct(surfaceFailure: true)
+        await buy()
+    }
+
     private func buy() async {
+        lastFailureWasRestore = false
         didStartPurchase = true
         AnalyticsService.shared.log(.proPurchaseStarted(source: source))
         let ok = await purchaseService.purchase()
@@ -657,9 +680,11 @@ struct ProPaywallView: View {
     }
 
     private func restorePurchases() async {
+        lastFailureWasRestore = true
         AnalyticsService.shared.log(.proRestoreStarted)
         let ok = await purchaseService.restore()
         if ok {
+            lastFailureWasRestore = false
             AnalyticsService.shared.log(.proRestoreSucceeded)
             AnalyticsUserProfile.sync(subjectStore: nil)
         } else {

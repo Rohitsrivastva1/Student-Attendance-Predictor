@@ -141,6 +141,7 @@ final class AnalyticsService {
     func log(_ event: AnalyticsEvent) {
         let name = event.name
         let params = event.parameters
+        recordMultiFeatureIfNeeded(for: event)
         runOnMain { [weak self] in
             guard let self else { return }
             var merged = self.commonParameters()
@@ -148,6 +149,24 @@ final class AnalyticsService {
             for backend in self.backends {
                 backend.log(name: name, parameters: merged)
             }
+        }
+    }
+
+    /// Maps high-value events into weekly multi-feature engagement tracking.
+    private func recordMultiFeatureIfNeeded(for event: AnalyticsEvent) {
+        switch event {
+        case .dayMarked:
+            MultiFeatureEngagementStore.record(.mark)
+        case .skipPlannerViewed:
+            MultiFeatureEngagementStore.record(.skipPlanner)
+        case .focusTimerStarted, .postMarkFocusPromptAccepted:
+            MultiFeatureEngagementStore.record(.focus)
+        case .forecastViewed, .lockedForecastViewed:
+            MultiFeatureEngagementStore.record(.forecast)
+        case .widgetPromptShown:
+            MultiFeatureEngagementStore.record(.widget)
+        default:
+            break
         }
     }
 
@@ -195,6 +214,11 @@ final class AnalyticsService {
     /// True after the user logs Mark Today at least once (`mark_today_first_use`).
     var hasMarkedAtLeastOnce: Bool {
         defaults.bool(forKey: Keys.didLogFirstMark)
+    }
+
+    /// Consecutive days with at least one app session (analytics streak).
+    var currentStreakDays: Int {
+        defaults.integer(forKey: Keys.streakDays)
     }
 
     /// Last paywall analytics source — used when StoreKit completes outside the paywall UI.
@@ -250,6 +274,7 @@ final class AnalyticsService {
         guard defaults.bool(forKey: Keys.didLogFirstMark) == false else { return }
         defaults.set(true, forKey: Keys.didLogFirstMark)
         NotificationService.cancelDayTwoMarkNudge()
+        NotificationService.cancelEveningMarkNudge()
         log(.markTodayFirstUse)
     }
 

@@ -28,9 +28,17 @@ enum NotificationService {
         guard recoveryNeeded > 0 else { return }
 
         let content = UNMutableNotificationContent()
-        content.title = "\(subjectName): Attendance Alert"
-        content.body = "Your attendance is \(String(format: "%.1f", currentPercentage))% — attend next \(recoveryNeeded) classes."
+        let riskCopy = NotificationPersonalization.apply(
+            title: "\(subjectName): Attendance Alert",
+            body: "Your attendance is \(String(format: "%.1f", currentPercentage))% — tap to plan which classes you can skip."
+        )
+        content.title = riskCopy.title
+        content.body = riskCopy.body
         content.sound = .default
+        content.userInfo = [
+            "type": "risk",
+            "deep_link": NotificationRoute.skipPlanner.rawValue
+        ]
 
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 3, repeats: false)
         let request = UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
@@ -50,11 +58,20 @@ enum NotificationService {
         guard bunkAllowed <= 2 else { return }
 
         let content = UNMutableNotificationContent()
-        content.title = "\(subjectName): Low Attendance Buffer"
-        content.body = bunkAllowed > 0
-            ? "You can safely skip \(bunkAllowed) class\(bunkAllowed == 1 ? "" : "es") next week — stay mindful."
-            : "Current attendance is \(String(format: "%.1f", currentPercentage))%. You can miss only \(max(0, bunkAllowed)) more classes safely."
+        let bufferBody = bunkAllowed > 0
+            ? "You can safely skip \(bunkAllowed) class\(bunkAllowed == 1 ? "" : "es") — tap to plan."
+            : "Attendance is \(String(format: "%.1f", currentPercentage))%. Tap to see your recovery path."
+        let bufferCopy = NotificationPersonalization.apply(
+            title: "\(subjectName): Low Attendance Buffer",
+            body: bufferBody
+        )
+        content.title = bufferCopy.title
+        content.body = bufferCopy.body
         content.sound = .default
+        content.userInfo = [
+            "type": "low_buffer",
+            "deep_link": NotificationRoute.skipPlanner.rawValue
+        ]
 
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 5, repeats: false)
         let request = UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
@@ -167,8 +184,12 @@ enum NotificationService {
         guard let fireDate = calendar.date(from: fireComponents), fireDate > Date() else { return }
 
         let content = UNMutableNotificationContent()
-        content.title = "Haven't logged today yet?"
-        content.body = "Open Bunk Planner and mark today's class in one tap."
+        let dayTwoCopy = NotificationPersonalization.apply(
+            title: "Haven't logged today yet?",
+            body: "Open Bunk Planner and mark today's class in one tap."
+        )
+        content.title = dayTwoCopy.title
+        content.body = dayTwoCopy.body
         content.sound = .default
         content.userInfo = [
             "type": "day2_mark",
@@ -181,12 +202,64 @@ enum NotificationService {
         )
         let request = UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
         center.add(request)
+        NotificationEngagementStore.recordScheduled()
         AnalyticsService.shared.log(.notificationScheduled(type: "day2_mark"))
     }
 
     static func cancelDayTwoMarkNudge() {
         UNUserNotificationCenter.current()
             .removePendingNotificationRequests(withIdentifiers: ["retention-day2-mark"])
+    }
+
+    /// Same-day nudge when the user has data but hasn't marked today (8 PM local).
+    static func scheduleEveningMarkNudgeIfNeeded(
+        hasMarkedToday: Bool,
+        hasSubjects: Bool,
+        pendingMarkCount: Int
+    ) {
+        let center = UNUserNotificationCenter.current()
+        let identifier = "retention-evening-mark"
+        center.removePendingNotificationRequests(withIdentifiers: [identifier])
+
+        let notificationsEnabled = UserDefaults.standard.object(forKey: "feature.notificationsEnabled") as? Bool ?? true
+        guard notificationsEnabled else { return }
+        guard hasSubjects else { return }
+        guard hasMarkedToday == false else { return }
+        guard AnalyticsService.shared.hasMarkedAtLeastOnce else { return }
+
+        let calendar = Calendar.current
+        let now = Date()
+        var fireComponents = calendar.dateComponents([.year, .month, .day], from: now)
+        fireComponents.hour = NotificationPersonalityConfig.eveningHour
+        fireComponents.minute = 0
+        guard let fireDate = calendar.date(from: fireComponents), fireDate > now else { return }
+
+        let pending = max(1, pendingMarkCount)
+        let content = UNMutableNotificationContent()
+        let eveningCopy = NotificationPersonalization.apply(
+            title: pending > 1 ? "Mark \(pending) subjects before bed?" : "Mark today's class?",
+            body: "One tap in Bunk Planner — keep your streak and safe-bunk count accurate."
+        )
+        content.title = eveningCopy.title
+        content.body = eveningCopy.body
+        content.sound = .default
+        content.userInfo = [
+            "type": "evening_mark",
+            "deep_link": NotificationRoute.markToday.rawValue
+        ]
+
+        let trigger = UNCalendarNotificationTrigger(
+            dateMatching: calendar.dateComponents([.year, .month, .day, .hour, .minute], from: fireDate),
+            repeats: false
+        )
+        center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: trigger))
+        NotificationEngagementStore.recordScheduled()
+        AnalyticsService.shared.log(.notificationScheduled(type: "evening_mark"))
+    }
+
+    static func cancelEveningMarkNudge() {
+        UNUserNotificationCenter.current()
+            .removePendingNotificationRequests(withIdentifiers: ["retention-evening-mark"])
     }
 
     static func scheduleHolidayWeekHint() {
@@ -214,8 +287,12 @@ enum NotificationService {
         guard recoveryNeeded > 0 else { return }
 
         let content = UNMutableNotificationContent()
-        content.title = "\(subjectName): Recovery Deadline"
-        content.body = "Plan a recovery streak. You still need \(recoveryNeeded) attended classes to get back on track."
+        let recoveryCopy = NotificationPersonalization.apply(
+            title: "\(subjectName): Recovery Deadline",
+            body: "Plan a recovery streak. You still need \(recoveryNeeded) attended classes to get back on track."
+        )
+        content.title = recoveryCopy.title
+        content.body = recoveryCopy.body
         content.sound = .default
 
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 60 * 60 * 8, repeats: false)
@@ -232,11 +309,19 @@ enum NotificationService {
         let seconds = max(1, afterSeconds)
         let content = UNMutableNotificationContent()
         if phase == "focus" {
-            content.title = "Focus session complete"
-            content.body = "Nice work — take a \(max(1, breakMinutes))-minute break."
+            let focusCopy = NotificationPersonalization.apply(
+                title: "Focus session complete",
+                body: "Nice work — take a \(max(1, breakMinutes))-minute break."
+            )
+            content.title = focusCopy.title
+            content.body = focusCopy.body
         } else {
-            content.title = "Break's over"
-            content.body = "Ready for another focus block?"
+            let breakCopy = NotificationPersonalization.apply(
+                title: "Break's over",
+                body: "Ready for another focus block?"
+            )
+            content.title = breakCopy.title
+            content.body = breakCopy.body
         }
         content.sound = .default
 
@@ -331,14 +416,21 @@ enum NotificationService {
 
         let triggerComponents = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: fireDate)
         let content = UNMutableNotificationContent()
-        content.title = "Your week in attendance"
         let attended = max(0, context.weeklyAttended)
         let missed = max(0, context.weeklyMissed)
+        let digestBody: String
         if context.atRiskSubjects > 0 {
-            content.body = "Attended \(attended) · missed \(missed). \(context.atRiskSubjects) subject\(context.atRiskSubjects == 1 ? "" : "s") still need recovery."
+            digestBody = "Attended \(attended) · missed \(missed). \(context.atRiskSubjects) subject\(context.atRiskSubjects == 1 ? "" : "s") still need recovery."
         } else {
-            content.body = "Attended \(attended) · missed \(missed). You're in a good place — keep the streak."
+            digestBody = "Attended \(attended) · missed \(missed). You're in a good place — keep the streak."
         }
+        let digestCopy = NotificationPersonalization.apply(
+            title: "Your week in attendance",
+            body: digestBody,
+            firstName: context.firstName
+        )
+        content.title = digestCopy.title
+        content.body = digestCopy.body
         content.sound = .default
         content.userInfo = [
             "type": "weekly_digest",
@@ -492,6 +584,7 @@ enum NotificationService {
 
         let request = UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
         UNUserNotificationCenter.current().add(request)
+        NotificationEngagementStore.recordScheduled()
         NotificationCooldownStore.record(payload: payload, on: fireDate, reserved: reserved)
         // Reserved habit slots are rebuilt often — log only immediate sends.
         guard reserved == false else { return }

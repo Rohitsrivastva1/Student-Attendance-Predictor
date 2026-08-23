@@ -21,12 +21,19 @@ final class GuidedSetupStore: ObservableObject {
 
     private enum Keys {
         static let completed = "guided.didComplete"
+        static let didLogStarted = "guided.didLogStarted"
     }
 
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+    }
+
+    /// Whether the user has meaningful attendance data (Mark Today or legacy log).
+    static func hasUserMarked(subjectCount: Int, hasAnalyticsMark: Bool, hasLegacyAttendance: Bool) -> Bool {
+        guard subjectCount > 0 else { return false }
+        return hasAnalyticsMark || hasLegacyAttendance
     }
 
     func refresh(subjectCount: Int, hasMarked: Bool) {
@@ -39,38 +46,74 @@ final class GuidedSetupStore: ObservableObject {
             return
         }
 
+        if hasMarked {
+            finishFlow(logCompleted: AnalyticsService.shared.hasMarkedAtLeastOnce)
+            return
+        }
+
         if subjectCount == 0 {
-            if activeStep != .addSubject {
-                activeStep = .addSubject
-                AnalyticsService.shared.log(.guidedSetupStepShown(step: GuidedSetupStep.addSubject.rawValue))
-            }
+            showStep(.addSubject)
             return
         }
 
-        if hasMarked == false {
-            if activeStep != .markToday {
-                activeStep = .markToday
-                AnalyticsService.shared.log(.guidedSetupStepShown(step: GuidedSetupStep.markToday.rawValue))
-            }
-            return
-        }
+        showStep(.markToday)
+    }
 
-        complete()
+    /// Call when onboarding finishes so the coach mark can appear on first Home visit.
+    func refreshAfterOnboarding(subjectCount: Int, hasMarked: Bool) {
+        refresh(subjectCount: subjectCount, hasMarked: hasMarked)
     }
 
     func subjectWasAdded() {
-        guard activeStep == .addSubject else { return }
-        activeStep = .markToday
-        AnalyticsService.shared.log(.guidedSetupStepShown(step: GuidedSetupStep.markToday.rawValue))
+        guard defaults.bool(forKey: Keys.completed) == false else { return }
+        guard UserDefaults.standard.bool(forKey: "onboarding.didComplete") else { return }
+        showStep(.markToday)
     }
 
     func complete() {
+        finishFlow(logCompleted: true)
+    }
+
+    func dismiss(step: GuidedSetupStep) {
+        AnalyticsService.shared.log(.guidedSetupDismissed(step: step.rawValue))
+        finishFlow(logCompleted: false)
+    }
+
+    /// Returning users with attendance history — skip coach marks without a completion event.
+    func markCompleteSilently() {
+        finishFlow(logCompleted: false)
+    }
+
+    #if DEBUG
+    func resetForDebug() {
+        defaults.set(false, forKey: Keys.completed)
+        defaults.set(false, forKey: Keys.didLogStarted)
+        activeStep = nil
+    }
+    #endif
+
+    private func showStep(_ step: GuidedSetupStep) {
+        guard activeStep != step else { return }
+        activeStep = step
+        logStartedIfNeeded()
+        AnalyticsService.shared.log(.guidedSetupStepShown(step: step.rawValue))
+    }
+
+    private func finishFlow(logCompleted: Bool) {
         guard defaults.bool(forKey: Keys.completed) == false else {
             activeStep = nil
             return
         }
         defaults.set(true, forKey: Keys.completed)
         activeStep = nil
-        AnalyticsService.shared.log(.guidedSetupCompleted)
+        if logCompleted {
+            AnalyticsService.shared.log(.guidedSetupCompleted)
+        }
+    }
+
+    private func logStartedIfNeeded() {
+        guard defaults.bool(forKey: Keys.didLogStarted) == false else { return }
+        defaults.set(true, forKey: Keys.didLogStarted)
+        AnalyticsService.shared.log(.guidedSetupStarted)
     }
 }

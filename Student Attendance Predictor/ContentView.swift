@@ -57,7 +57,20 @@ struct ContentView: View {
             // Cold-start app-open: wait until onboarding is dismissed so it doesn't cover the intro.
             if UserDefaults.standard.bool(forKey: "onboarding.didComplete") {
                 AdMobAppOpenService.shared.showAdIfAvailable()
+                AppStoreReviewPromptCoordinator.shared.scheduleDayTwoPromptIfNeeded()
             }
+        }
+        .onChange(of: showOnboarding) { _, isShowing in
+            guard isShowing == false, let store = subjectStore else { return }
+            GuidedSetupStore.shared.refreshAfterOnboarding(
+                subjectCount: store.subjects.count,
+                hasMarked: GuidedSetupStore.hasUserMarked(
+                    subjectCount: store.subjects.count,
+                    hasAnalyticsMark: AnalyticsService.shared.hasMarkedAtLeastOnce,
+                    hasLegacyAttendance: store.subjects.contains(where: { $0.totalClasses > 0 })
+                )
+            )
+            AppStoreReviewPromptCoordinator.shared.scheduleDayTwoPromptIfNeeded()
         }
         .onReceive(NotificationCenter.default.publisher(for: .attendanceDataChanged)) { _ in
             subjectStore?.reloadFromExternalChange()
@@ -78,6 +91,7 @@ struct ContentView: View {
 
         if store.subjects.contains(where: { $0.totalClasses > 0 }) {
             defaults.set(true, forKey: key)
+            GuidedSetupStore.shared.markCompleteSilently()
             showOnboarding = false
             AnalyticsService.shared.log(.onboardingSkipped(reason: "returning_data"))
             return

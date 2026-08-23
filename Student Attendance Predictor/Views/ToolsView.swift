@@ -11,8 +11,23 @@ struct ToolsView: View {
     @ObservedObject var subjectStore: SubjectStore
     @ObservedObject var gpaStore: GPAStore
     @ObservedObject var deadlineStore: DeadlineStore
+    @Binding var navigateToDeadlines: Bool
     @ObservedObject private var entitlements = AdEntitlementsStore.shared
     @ObservedObject private var focusTimer = FocusTimerService.shared
+
+    @State private var showDeadlinesScreen = false
+
+    init(
+        subjectStore: SubjectStore,
+        gpaStore: GPAStore,
+        deadlineStore: DeadlineStore,
+        navigateToDeadlines: Binding<Bool> = .constant(false)
+    ) {
+        self.subjectStore = subjectStore
+        self.gpaStore = gpaStore
+        self.deadlineStore = deadlineStore
+        _navigateToDeadlines = navigateToDeadlines
+    }
 
     private var subjects: [SubjectSummary] { subjectStore.subjects }
     private var market: StudentMarket { StudentMarketStore.current }
@@ -129,14 +144,27 @@ struct ToolsView: View {
                 )
             )
         }
+        .onChange(of: navigateToDeadlines) { _, shouldOpen in
+            guard shouldOpen else { return }
+            showDeadlinesScreen = true
+            navigateToDeadlines = false
+        }
+        .navigationDestination(isPresented: $showDeadlinesScreen) {
+            AcademicsView(
+                gpaStore: gpaStore,
+                deadlineStore: deadlineStore,
+                subjects: subjects,
+                mode: .deadlines
+            )
+        }
     }
 
     private var toolsHeader: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Tools")
+            Text("More tools")
                 .font(.system(size: 22, weight: .black, design: .rounded))
                 .foregroundStyle(.white)
-            Text("Focus, planning, grades, and reports — separate from attendance tracking.")
+            Text("Focus, planning, grades, and exports — open anytime. Daily attendance stays on Home.")
                 .font(.system(size: 13, weight: .medium, design: .rounded))
                 .foregroundStyle(.white.opacity(0.6))
         }
