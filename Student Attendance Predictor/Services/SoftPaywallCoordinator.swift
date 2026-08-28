@@ -23,7 +23,8 @@ final class SoftPaywallCoordinator: ObservableObject {
     static let habitValueMinDays = 1
     #else
     static let streakThreshold = 7
-    static let cooldownHours: Double = 5 * 24
+    /// 48h — 5-day cooldown cut paywall views ~40% and sales went to zero.
+    static let cooldownHours: Double = 2 * 24
     /// Earliest day to auto-show habit paywall (after first value, not install day).
     static let habitValueMinDays = 5
     #endif

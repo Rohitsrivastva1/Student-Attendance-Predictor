@@ -38,6 +38,7 @@ struct HomeView: View {
     @State private var semesterStartDate = SemesterSettings.startDate ?? Date()
     @State private var semesterEndDate = SemesterSettings.endDate ?? Calendar.current.date(byAdding: .weekOfYear, value: 16, to: Date())!
     @ObservedObject private var entitlements = AdEntitlementsStore.shared
+    @ObservedObject private var purchaseService = ProPurchaseService.shared
     @ObservedObject private var softPaywall = SoftPaywallCoordinator.shared
     @StateObject private var gpaStore = GPAStore()
     @StateObject private var deadlineStore = DeadlineStore()
@@ -79,6 +80,7 @@ struct HomeView: View {
                     .padding(.top, 6)
                     .padding(.bottom, isRegularWidth ? 6 : 8)
             }
+            stickyAdBanner
         }
     }
 
@@ -173,6 +175,28 @@ struct HomeView: View {
         }
     }
 
+    /// Skip Planner is Pro. Home previously opened the full sheet for free users
+    /// ("Plan skips free"), which removed the reason to pay.
+    private func presentSkipPlannerOrPaywall(day: Date = Calendar.current.startOfDay(for: Date())) {
+        if entitlements.isPro {
+            skipPlannerDay = day
+            AnalyticsService.shared.log(
+                .skipPlannerViewed(dayCount: subjectStore.subjectsForMarkToday(on: day).count)
+            )
+        } else {
+            AnalyticsService.shared.log(.skipPlannerLocked)
+            AnalyticsService.shared.log(.proCtaTapped(surface: "skip_planner", action: "go_pro"))
+            proPaywallSource = "skip_planner"
+            isShowingProPaywall = true
+        }
+    }
+
+    /// Don't stack a Tools promo on top of the at-risk Pro card.
+    private var shouldShowHomePromoCard: Bool {
+        if entitlements.isPro { return true }
+        return subjectStore.dashboardSummary.riskSubjects == 0
+    }
+
     private func consumeNotificationRoute(_ destination: NotificationRoute?) {
         guard let destination else { return }
         switch destination {
@@ -183,8 +207,7 @@ struct HomeView: View {
             highlightMarkToday = true
         case .skipPlanner:
             selectedTab = .home
-            skipPlannerDay = Calendar.current.startOfDay(for: Date())
-            AnalyticsService.shared.log(.skipPlannerViewed(dayCount: subjectStore.subjectsForMarkToday(on: Date()).count))
+            presentSkipPlannerOrPaywall()
         case .tools:
             selectedTab = .tools
         case .insights:
@@ -362,8 +385,20 @@ struct HomeView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+            // Pinned above the tab bar so mark-and-leave users still see the ad.
+            stickyAdBanner
             phoneTabBar
         }
+    }
+
+    /// Anchored banner — always on screen, not inside the Home scroll.
+    @ViewBuilder
+    private var stickyAdBanner: some View {
+        AdMobBannerCard(
+            placement: AdMobConfiguration.Placement.home,
+            isActive: true
+        )
+        .background(Color(red: 0.05, green: 0.06, blue: 0.1))
     }
 
     private var phoneTabBar: some View {
@@ -542,23 +577,22 @@ struct HomeView: View {
                         )
                         .id("markTodayCard")
 
-                        homeRotatingPromoCard
+                        if entitlements.isPro == false, hasAttendanceData {
+                            proUpsellCard
+                        }
+
+                        if shouldShowHomePromoCard {
+                            homeRotatingPromoCard
+                        }
 
                         atRiskSharePromptCard
 
                         upcomingExamAttendanceWarning
 
-                        AdMobBannerCard(
-                            placement: AdMobConfiguration.Placement.home,
-                            isActive: selectedTab == .home
-                        )
-
-                        // Calculator sits under Today's Classes + banner.
                         inputSection
 
                         if hasAttendanceData {
                             assistantHeroSection
-                            proUpsellCard
                             scenariosDisclosure
                         }
                     }
@@ -591,10 +625,6 @@ struct HomeView: View {
                     }
                     weeklySummaryCard
                     skipPlannerWeekCard
-                    AdMobBannerCard(
-                        placement: AdMobConfiguration.Placement.insights,
-                        isActive: selectedTab == .insights
-                    )
                     streakAndHighlightsCard
                     gamificationBadgesCard
                     trendGraphCard
@@ -615,10 +645,6 @@ struct HomeView: View {
             ScrollView {
                 VStack(spacing: 24) {
                     allSubjectsDashboardCard
-                    AdMobBannerCard(
-                        placement: AdMobConfiguration.Placement.overview,
-                        isActive: selectedTab == .overview
-                    )
                     overviewSubjectManagerCard
                 }
                 .padding(.horizontal, 20)
@@ -721,62 +747,41 @@ struct HomeView: View {
     private var proUpsellCard: some View {
         Group {
             if entitlements.isPro == false {
-                let atRisk = subjectStore.dashboardSummary.riskSubjects > 0
-                let skip = studentMarket.skipVerb
-                VStack(alignment: .leading, spacing: 12) {
-                    Text(atRisk ? "Attendance is in the danger zone" : "Pay once. Ads gone for good.")
-                        .font(.system(size: 15, weight: .black, design: .rounded))
-                        .foregroundStyle(.white)
-                    Text(
-                        atRisk
-                            ? "Pro shows how many classes to attend to recover — and whether you can still \(skip) later."
-                            : "Lifetime Pro: skip planner, forecast, unlimited subjects, PDF + CSV, ads off."
-                    )
-                        .font(.system(size: 13, weight: .medium, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.65))
-
-                    if atRisk {
-                        Button {
-                            triggerLightHaptic()
-                            AnalyticsService.shared.log(
-                                .proCtaTapped(surface: "at_risk_home", action: "skip_planner")
-                            )
-                            skipPlannerDay = Calendar.current.startOfDay(for: Date())
-                            AnalyticsService.shared.log(.skipPlannerViewed(dayCount: subjectStore.subjectsForMarkToday(on: Date()).count))
-                        } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: "calendar.badge.checkmark")
-                                Text("Plan skips free")
-                                    .font(.system(size: 14, weight: .bold, design: .rounded))
-                            }
-                            .foregroundStyle(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(
-                                Capsule(style: .continuous)
-                                    .stroke(Color.white.opacity(0.35), lineWidth: 1)
-                            )
-                        }
-                        .buttonStyle(PressableButtonStyle())
+                let copy = homeProCopy
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 8) {
+                        Image(systemName: copy.atRisk ? "exclamationmark.triangle.fill" : "lock.fill")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(copy.atRisk ? Color.orange : gold)
+                        Text(copy.eyebrow)
+                            .font(.system(size: 11, weight: .black, design: .rounded))
+                            .foregroundStyle(copy.atRisk ? Color.orange : gold)
+                            .tracking(0.6)
                     }
+
+                    Text(copy.title)
+                        .font(.system(size: 18, weight: .black, design: .rounded))
+                        .foregroundStyle(.white)
+                    Text(copy.body)
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.68))
 
                     Button {
                         triggerLightHaptic()
-                        let surface = atRisk ? "at_risk_home" : "pro_upsell"
                         AnalyticsService.shared.log(
-                            .proCtaTapped(surface: surface, action: "go_pro")
+                            .proCtaTapped(surface: copy.surface, action: "go_pro")
                         )
-                        proPaywallSource = surface
+                        proPaywallSource = copy.surface
                         isShowingProPaywall = true
                     } label: {
                         HStack(spacing: 8) {
                             Image(systemName: "crown.fill")
-                            Text(atRisk ? "Go Pro · See recovery path" : "Go Pro · Pay once, ads gone")
-                                .font(.system(size: 14, weight: .bold, design: .rounded))
+                            Text(copy.cta)
+                                .font(.system(size: 15, weight: .heavy, design: .rounded))
                         }
                         .foregroundStyle(.black.opacity(0.9))
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
+                        .padding(.vertical, 13)
                         .background(
                             Capsule(style: .continuous)
                                 .fill(
@@ -792,23 +797,94 @@ struct HomeView: View {
                         )
                     }
                     .buttonStyle(PressableButtonStyle())
+
+                    Text(copy.footnote)
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.42))
+                        .frame(maxWidth: .infinity)
                 }
                 .padding(16)
                 .background(
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(Color.white.opacity(0.05))
+                        .fill(copy.atRisk ? Color.orange.opacity(0.10) : Color.white.opacity(0.05))
                         .overlay(
                             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                                .stroke(copy.atRisk ? Color.orange.opacity(0.45) : gold.opacity(0.35), lineWidth: 1)
                         )
                 )
                 .onAppear {
-                    AnalyticsService.shared.logProCtaShownOnce(
-                        surface: atRisk ? "at_risk_home" : "pro_upsell"
-                    )
+                    AnalyticsService.shared.logProCtaShownOnce(surface: copy.surface)
                 }
             }
         }
+    }
+
+    private var gold: Color { Color(red: 1.0, green: 0.78, blue: 0.28) }
+
+    /// Loss aversion + curiosity gap — numbers from this student's data, not fake scarcity.
+    private var homeProCopy: (eyebrow: String, title: String, body: String, cta: String, footnote: String, surface: String, atRisk: Bool) {
+        let skip = studentMarket.skipVerb
+        let atRisk = subjectStore.dashboardSummary.riskSubjects > 0
+        let recovery = subjectStore.dashboardSummary.mostAtRiskSubject?.recoveryNeeded
+            ?? viewModel.result?.recoveryNeeded
+            ?? 0
+        let bunks = viewModel.result?.status == .safe ? (viewModel.result?.bunkAllowed ?? 0) : 0
+        let safeDays = SkipPlanner.rankedSkipDays(subjects: subjectStore.subjects, limit: 7)
+            .filter { $0.riskLevel == .safe }
+            .count
+        let price = purchaseService.displayPrice
+        let priceBit = price.map { " · \($0)" } ?? ""
+        let footnote = studentMarket == .india
+            ? "Pay once · no monthly · less than a canteen snack"
+            : "Pay once · no subscription · keep it forever"
+
+        if atRisk {
+            let recover = max(1, recovery)
+            return (
+                studentMarket == .india ? "75% RULE" : "AT RISK",
+                studentMarket == .india ? "Don't get detained" : "Don't drop below target",
+                recover == 1
+                    ? "One more miss can cost the semester. See the exact recovery path before you \(skip)."
+                    : "You need \(recover) more classes to climb back. Guessing a \(skip) is how people get stuck.",
+                "See my recovery path\(priceBit)",
+                footnote,
+                "at_risk_home",
+                true
+            )
+        }
+        if safeDays > 0 {
+            return (
+                "WE ALREADY RAN THE MATH",
+                safeDays == 1
+                    ? "1 day this week looks safe"
+                    : "\(safeDays) days this week look safe",
+                "Unlock to see which days — before you \(skip) the wrong one and burn your buffer.",
+                "Reveal the safe days\(priceBit)",
+                footnote,
+                "skip_planner",
+                false
+            )
+        }
+        if bunks > 0 {
+            return (
+                "BUFFER LEFT",
+                bunks == 1 ? "You have 1 safe \(skip) left" : "You have \(bunks) safe \(studentMarket.skipNounPlural) left",
+                "Don't spend them on the wrong lecture. Pro maps the day before you decide.",
+                "Map my safe \(studentMarket.skipNounPlural)\(priceBit)",
+                footnote,
+                "pro_upsell",
+                false
+            )
+        }
+        return (
+            "KNOW BEFORE YOU \(skip.uppercased())",
+            studentMarket == .india ? "Know before you bunk" : "Know before you skip",
+            "Skip planner, forecast, and unlimited subjects — one payment for the whole semester.",
+            "Unlock Pro\(priceBit)",
+            footnote,
+            "pro_upsell",
+            false
+        )
     }
 
     private var animatedBackground: some View {
@@ -3805,9 +3881,8 @@ struct HomeView: View {
         switch promo {
         case .skipPlanner:
             AnalyticsService.shared.log(.homePromoCardTapped(kind: promo.rawValue, action: "skip_planner"))
-            skipPlannerDay = Calendar.current.startOfDay(for: Date())
             MultiFeatureEngagementStore.record(.skipPlanner)
-            AnalyticsService.shared.log(.skipPlannerViewed(dayCount: subjectStore.subjectsForMarkToday(on: Date()).count))
+            presentSkipPlannerOrPaywall()
         case .focus:
             AnalyticsService.shared.log(.homePromoCardTapped(kind: promo.rawValue, action: "focus"))
             if let subject = subjectStore.selectedSubject {
@@ -3827,7 +3902,9 @@ struct HomeView: View {
 
     @ViewBuilder
     private var atRiskSharePromptCard: some View {
-        if dismissAtRiskSharePrompt == false,
+        // Free at-risk users should see Pro, not a share card (812 share vs 114 paywall this week).
+        if entitlements.isPro,
+           dismissAtRiskSharePrompt == false,
            let result = viewModel.result,
            result.status == .risk,
            hasAttendanceData {
@@ -3912,16 +3989,14 @@ struct HomeView: View {
             selectedTab = .home
             highlightMarkToday = true
         case "start_recovery", "skip_plan":
-            skipPlannerDay = Calendar.current.startOfDay(for: Date())
-            AnalyticsService.shared.log(.skipPlannerViewed(dayCount: subjectStore.subjectsForMarkToday(on: Date()).count))
+            presentSkipPlannerOrPaywall()
         case "create_subject":
             isShowingSubjects = true
         case "maintain_streak":
             selectedTab = .insights
         default:
             if result?.status == .risk {
-                skipPlannerDay = Calendar.current.startOfDay(for: Date())
-                AnalyticsService.shared.log(.skipPlannerViewed(dayCount: subjectStore.subjectsForMarkToday(on: Date()).count))
+                presentSkipPlannerOrPaywall()
             } else {
                 selectedTab = .home
                 highlightMarkToday = true

@@ -13,17 +13,17 @@ struct PrivacyPolicyView: View {
             VStack(alignment: .leading, spacing: 14) {
                 section(
                     title: "Overview",
-                    body: "Bunk Planner helps you plan attendance and bunk safely. Your attendance marks and forecasts stay on your device. During setup we ask for your name, class, and school or college — that profile and your subject names may be sent to Schoolabe as described below."
+                    body: "Bunk Planner helps you plan attendance and bunk safely. Attendance is stored on your device and may also sync to Schoolabe so we can improve the product, as described below. During setup we ask for your name, class, and school or college."
                 )
 
                 section(
-                    title: "Profile sync",
-                    body: "When you complete onboarding or update About you in Settings, Bunk Planner sends your name, optional age, class or degree, school or college name, and the list of subject names you create to Schoolabe (info@schoolabe.com) to improve the app. We do not upload your daily attendance marks, bunk counts, or CGPA."
+                    title: "Profile & attendance sync",
+                    body: "When you use Bunk Planner, we may send to Schoolabe (info@schoolabe.com): your name, optional age, class or degree, school or college; the subjects you create; your full attendance log (date, scheduled/attended class counts, holiday flag per subject-day); whether you opened the app on a given day (last active date); and whether you have Bunk Planner Pro. We do not sell this data. CGPA details are not uploaded through this sync."
                 )
 
                 section(
                     title: "Remove your data",
-                    body: "Settings → About you → Remove my data clears your profile on this device and sets a removal flag on Schoolabe for tracking. Your attendance history on this phone is not deleted."
+                    body: "Settings → About you → Remove my data clears your profile on this device and sets a removal flag on Schoolabe for tracking. Your local attendance history on this phone is not deleted by that action."
                 )
 
                 section(
