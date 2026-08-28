@@ -502,6 +502,7 @@ final class SubjectStore: ObservableObject {
             NotificationService.registerPersonalityCategory()
             NotificationService.scheduleDayTwoMarkNudgeIfNeeded()
             publishWidgetSnapshot()
+            SchoolabeSyncService.shared.scheduleActiveTodaySyncIfNeeded(subjectStore: self)
         }
         NotificationCenter.default.addObserver(
             forName: .studentProfileDidUpdate,
@@ -990,6 +991,7 @@ final class SubjectStore: ObservableObject {
                 streak: attendanceStreakDays()
             )
         }
+        SchoolabeSyncService.shared.scheduleSync(subjectStore: self)
     }
 
     /// Removes a day's mark and reverses its contribution to the counters.
@@ -1016,6 +1018,7 @@ final class SubjectStore: ObservableObject {
             reloadSubjects()
         }
         AnalyticsService.shared.log(.dayCleared(source: source))
+        SchoolabeSyncService.shared.scheduleSync(subjectStore: self)
     }
 
     private func finalizeAfterCounterChange(subjectEntity: SubjectEntity) {

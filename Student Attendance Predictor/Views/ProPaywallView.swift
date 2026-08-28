@@ -30,6 +30,7 @@ struct ProPaywallView: View {
     @State private var didLogPriceShown = false
     @State private var didLogDismiss = false
     @State private var didPurchaseSucceed = false
+    @State private var didCancelCheckout = false
     @State private var lastFailureWasRestore = false
 
     private var purchaseAlertTitle: String {
@@ -44,29 +45,16 @@ struct ProPaywallView: View {
 
     private var features: [(icon: String, title: String, subtitle: String)] {
         let skipVerb = StudentMarketStore.current.skipVerb
-        let ads = ("sparkles", "Study without interruptions", "Banners and full-screen ads stay gone for good.")
-        let forecast = ("chart.line.uptrend.xyaxis", "Semester forecast for every subject", "See where each subject lands before you skip — not just today's %.")
-        let subjects = ("books.vertical.fill", "Unlimited subjects", "Free includes \(ProPurchaseConfiguration.freeSubjectLimit). Pro tracks your full timetable.")
-        let exports = ("square.and.arrow.up.fill", "PDF + CSV export", "Parent-ready PDF and a spreadsheet of every logged day.")
-        let skip = ("calendar.badge.checkmark", "Skip planner", "Tap a future class day and see who stays safe if you \(skipVerb).")
-        let focus = ("timer", "Custom Focus Timer", "90-minute sessions, custom lengths, longer breaks, and a weekly study recap.")
+        let skip = ("calendar.badge.checkmark", "See the safe day before you \(skipVerb)", "We already did the math. Pro shows which lecture you can miss.")
+        let forecast = ("chart.line.uptrend.xyaxis", "Know where you'll land", "Subject-wise forecast before the semester ends — not after detention.")
+        let subjects = ("books.vertical.fill", "Every \(StudentMarketStore.current.courseNoun), not just 3", "Free stops at \(ProPurchaseConfiguration.freeSubjectLimit). Real timetables need Pro.")
         switch source {
-        case "forecast", "locked_forecast":
-            return [forecast, skip, subjects, exports, focus, ads]
-        case "at_risk_week", "at_risk_home", "at_risk_week_3":
-            return [forecast, skip, subjects, exports, focus, ads]
         case "subject_limit":
-            return [subjects, skip, forecast, exports, focus, ads]
-        case "pdf_export", "csv_export":
-            return [exports, skip, forecast, subjects, focus, ads]
-        case "skip_planner":
-            return [skip, forecast, subjects, exports, focus, ads]
-        case "focus_custom":
-            return [focus, skip, forecast, subjects, exports, ads]
-        case "streak_7", "habit_value":
-            return [skip, forecast, subjects, exports, focus, ads]
+            return [subjects, skip, forecast]
+        case "at_risk_week", "at_risk_home", "at_risk_week_3":
+            return [forecast, skip, subjects]
         default:
-            return [skip, forecast, subjects, exports, focus, ads]
+            return [skip, forecast, subjects]
         }
     }
 
@@ -88,6 +76,7 @@ struct ProPaywallView: View {
             didLogPriceShown = false
             didLogDismiss = false
             didPurchaseSucceed = false
+            didCancelCheckout = false
             AnalyticsService.shared.setLastProPaywallSource(source)
             AnalyticsService.shared.log(.proPaywallViewed(source: source))
             ProPurchaseService.shared.start()
@@ -219,6 +208,9 @@ struct ProPaywallView: View {
                         .opacity(appearFeatures ? 1 : 0)
                         .offset(y: appearFeatures ? 0 : 16)
 
+                    comparisonTable
+                        .opacity(appearFeatures ? 1 : 0)
+
                     comparisonChip
                         .opacity(appearFeatures ? 1 : 0)
                 }
@@ -309,9 +301,9 @@ struct ProPaywallView: View {
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Text("No subscriptions.")
+                Text(priceAnchorLine)
                     .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .foregroundStyle(gold.opacity(0.9))
+                    .foregroundStyle(gold.opacity(0.95))
             }
         }
         .frame(maxWidth: .infinity)
@@ -362,11 +354,68 @@ struct ProPaywallView: View {
         )
     }
 
+    private var comparisonTable: some View {
+        let skip = StudentMarketStore.current.skipVerb
+        let rows: [(String, String, String)] = [
+            ("Subjects", "3", "Unlimited"),
+            ("Before you \(skip)", "Guess", "See the day"),
+            ("Semester forecast", "Locked", "Every subject"),
+            ("Ads", "On", "Off forever")
+        ]
+        return VStack(spacing: 0) {
+            HStack {
+                Text("Why pay")
+                    .font(.system(size: 12, weight: .black, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.4))
+                Spacer()
+                Text("Free")
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .frame(width: 72, alignment: .trailing)
+                Text("Pro")
+                    .font(.system(size: 12, weight: .black, design: .rounded))
+                    .foregroundStyle(gold)
+                    .frame(width: 88, alignment: .trailing)
+            }
+            .padding(.bottom, 10)
+
+            ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                HStack(alignment: .firstTextBaseline) {
+                    Text(row.0)
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.78))
+                    Spacer()
+                    Text(row.1)
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.38))
+                        .frame(width: 72, alignment: .trailing)
+                    Text(row.2)
+                        .font(.system(size: 13, weight: .heavy, design: .rounded))
+                        .foregroundStyle(.white)
+                        .frame(width: 88, alignment: .trailing)
+                }
+                .padding(.vertical, 8)
+                if index < rows.count - 1 {
+                    Divider().overlay(Color.white.opacity(0.08))
+                }
+            }
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(gold.opacity(0.22), lineWidth: 1)
+                )
+        )
+    }
+
     private var comparisonChip: some View {
         HStack(spacing: 8) {
             Image(systemName: "checkmark.seal.fill")
                 .foregroundStyle(cyan)
-            Text("Lifetime purchase · No subscriptions · Restorable anywhere")
+            Text("Pay once · No monthly · Restorable on a new phone")
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
                 .foregroundStyle(.white.opacity(0.65))
         }
@@ -420,6 +469,14 @@ struct ProPaywallView: View {
             .buttonStyle(ProPressableStyle())
             .disabled(isBusy)
 
+            if didCancelCheckout {
+                Text(checkoutCancelHint)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(gold.opacity(0.9))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 8)
+            }
+
             Button {
                 Task { await restorePurchases() }
             } label: {
@@ -443,6 +500,13 @@ struct ProPaywallView: View {
                 .foregroundStyle(.white.opacity(0.38))
                 .multilineTextAlignment(.center)
         }
+    }
+
+    private var checkoutCancelHint: String {
+        if StudentMarketStore.current == .india {
+            return "No charge. If Apple's sheet closed, add a card or UPI in Settings → Apple ID → Payment, then tap again."
+        }
+        return "No charge. If checkout closed, add a payment method to your Apple ID in Settings, then tap again."
     }
 
     private var successLayer: some View {
@@ -523,51 +587,59 @@ struct ProPaywallView: View {
     private var heroHeadline: String {
         let market = StudentMarketStore.current
         switch source {
-        case "forecast", "locked_forecast":
-            return market == .india ? "Know before you bunk" : "Know before you skip"
+        case "forecast", "locked_forecast", "skip_planner":
+            return market == .india ? "Don't bunk the wrong day" : "Don't skip the wrong day"
         case "at_risk_week", "at_risk_home", "at_risk_week_3":
-            return market == .india ? "Don't get detained" : "Protect your attendance"
+            return market == .india ? "Don't get detained" : "Don't drop below target"
         case "subject_limit":
-            return "Track every \(market.courseNoun)"
+            return "Your real timetable is locked"
         case "pdf_export", "csv_export":
-            return "Share the proof"
-        case "skip_planner":
-            return market == .india ? "Know before you bunk" : "Know before you skip"
+            return "Show them the proof"
         case "focus_custom":
             return "Study on your clock"
         case "streak_7":
-            return "Keep the streak"
+            return "You earned the planner"
         case "habit_value":
-            return "Plan the semester"
+            return "Stop guessing this semester"
         default:
-            return "Go Pro"
+            return market == .india ? "Know before you bunk" : "Know before you skip"
         }
     }
 
     private var heroSubtitle: String {
         let skip = StudentMarketStore.current.skipVerb
         switch source {
-        case "forecast", "locked_forecast":
-            return "Unlock semester forecast — know who you can \(skip) before it's too late."
+        case "forecast", "locked_forecast", "skip_planner":
+            return "Guessing a \(skip) is how the 75% line gets crossed. Pro shows the day before you walk out."
         case "at_risk_week", "at_risk_home", "at_risk_week_3":
-            return "See exactly how many classes it takes to get back above target."
+            return "One more miss can cost the semester. See the exact recovery path — then decide."
         case "subject_limit":
-            return "Free includes \(ProPurchaseConfiguration.freeSubjectLimit) subjects. Pro tracks the full timetable."
+            return "Free stops at \(ProPurchaseConfiguration.freeSubjectLimit) \(StudentMarketStore.current.courseNounPlural). Unlock the rest of your week."
         case "pdf_export":
             return "Parent-ready PDF with attendance + grades. One tap to share."
         case "csv_export":
             return "Export every logged day as a spreadsheet — plus the parent-ready PDF."
-        case "skip_planner":
-            return "See exactly which future class days stay safe if you \(skip) — before you decide."
         case "focus_custom":
             return "90-minute sessions, custom lengths, longer breaks, and a weekly study recap."
         case "streak_7":
-            return "Unlock semester forecast and track every subject — you've built the habit."
+            return "You've been logging. Don't waste that streak on a guessed \(skip)."
         case "habit_value":
-            return "See where each subject lands by semester end — you've been logging consistently."
+            return "Your numbers are in. Unlock the map of which days stay safe."
         default:
-            return "Skip planner, semester forecast, unlimited subjects, and PDF + CSV — one lifetime purchase."
+            return "Skip planner + forecast for every subject. Pay once. Keep it all semester."
         }
+    }
+
+    private var priceAnchorLine: String {
+        if let price = purchaseService.displayPrice {
+            if StudentMarketStore.current == .india {
+                return "\(price) once · less than a canteen snack · no monthly"
+            }
+            return "\(price) once · no subscription · keep it forever"
+        }
+        return StudentMarketStore.current == .india
+            ? "Pay once · no monthly · less than a canteen snack"
+            : "Pay once · no subscription · keep it forever"
     }
 
     private var isBusy: Bool {
@@ -586,10 +658,18 @@ struct ProPaywallView: View {
         case .purchasing:
             return "Unlocking…"
         default:
-            if let price = purchaseService.displayPrice {
-                return "Unlock Pro — \(price) lifetime"
+            let price = purchaseService.displayPrice
+            let suffix = price.map { " — \($0)" } ?? ""
+            switch source {
+            case "skip_planner", "forecast", "locked_forecast":
+                return "Reveal my safe days\(suffix)"
+            case "at_risk_week", "at_risk_home", "at_risk_week_3":
+                return "See my recovery path\(suffix)"
+            case "subject_limit":
+                return "Unlock all subjects\(suffix)"
+            default:
+                return price.map { "Unlock Pro — \($0) once" } ?? "Unlock Pro — pay once"
             }
-            return "Unlock Pro — pay once"
         }
     }
 
@@ -613,6 +693,7 @@ struct ProPaywallView: View {
                 .proPurchaseFailed(source: source, reason: Self.analyticsFailureReason(message))
             )
         } else {
+            didCancelCheckout = true
             AnalyticsService.shared.log(.proPurchaseCancelled(source: source))
         }
     }

@@ -126,7 +126,7 @@ struct SettingsSheetView: View {
                         }
                     }
 
-                    Text("Used to improve Bunk Planner — name, class, college, and subject names you create.")
+                    Text("Used to improve Bunk Planner — name, class, college, subjects, attendance log, and whether you opened the app today.")
                         .font(.system(size: 12, weight: .medium, design: .rounded))
                         .foregroundStyle(.secondary)
 
@@ -368,7 +368,7 @@ struct SettingsSheetView: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Clears your profile on this device and tells Schoolabe to mark your synced data as removed. Your attendance marks on this phone stay.")
+                Text("Clears your profile on this device and marks your Schoolabe sync as removed for tracking. Attendance history on this phone stays.")
             }
             .alert("Could not remove data", isPresented: Binding(
                 get: { removeUserDataErrorMessage != nil },

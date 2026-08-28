@@ -220,6 +220,7 @@ private final class AdMobBannerHostViewController: UIViewController, BannerViewD
     private var loadedWidth: CGFloat = 0
     private var retryCount = 0
     private var isCurrentLoadARetry = false
+    private var didTryStandardBannerSize = false
     private let maxQuickRetries = 2
     /// Ignore flick-through tab switches before spending a network request.
     private let dwellBeforeRequestNanoseconds: UInt64 = 1_500_000_000
@@ -454,6 +455,14 @@ private final class AdMobBannerHostViewController: UIViewController, BannerViewD
         print("[AdMob] Banner (\(placement)) failed: \(reason) — \(error.localizedDescription)")
         #endif
         guard isActive else { return }
+
+        // Adaptive banners often no-fill in India; 320x50 still sells.
+        if didTryStandardBannerSize == false, Self.isNoFill(reason: reason, error: error) {
+            didTryStandardBannerSize = true
+            bannerView.adSize = AdSizeBanner
+            scheduleBannerReload(on: bannerView, afterNanoseconds: 2_000_000_000)
+            return
+        }
 
         if retryCount < maxQuickRetries {
             retryCount += 1

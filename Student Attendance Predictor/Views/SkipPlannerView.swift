@@ -150,6 +150,27 @@ struct SkipPlannerWeekCard: View {
     private var skipVerb: String { StudentMarketStore.current.skipVerb }
     private var days: [Date] { SkipPlanner.upcomingClassDays(subjects: subjects) }
 
+    private var safeDayCount: Int {
+        days.filter { SkipPlanner.evaluate(date: $0, subjects: subjects).riskLevel == .safe }.count
+    }
+
+    private var lockedTeaser: String {
+        if days.isEmpty {
+            return "Add a timetable — then we’ll tell you which days stay safe."
+        }
+        if safeDayCount == 0 {
+            return "We already ran this week. Unlock to see which days you should not \(skipVerb)."
+        }
+        if safeDayCount == 1 {
+            return "1 day this week looks safe. Unlock to see which — before you \(skipVerb) the wrong one."
+        }
+        return "\(safeDayCount) days this week look safe. Unlock to see which — before you \(skipVerb) the wrong one."
+    }
+
+    private var lockedCTA: String {
+        safeDayCount > 0 ? "Reveal the safe days" : "Unlock skip planner"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
@@ -159,7 +180,7 @@ struct SkipPlannerWeekCard: View {
                         .foregroundStyle(.white)
                     Text(isPro
                          ? "Tap a day to see if you can \(skipVerb)."
-                         : "Know which days stay safe before you \(skipVerb).")
+                         : lockedTeaser)
                         .font(.system(size: 13, weight: .medium, design: .rounded))
                         .foregroundStyle(.white.opacity(0.55))
                 }
@@ -188,7 +209,7 @@ struct SkipPlannerWeekCard: View {
 
             if isPro == false {
                 Button(action: onUnlock) {
-                    Label("Unlock skip planner", systemImage: "crown.fill")
+                    Label(lockedCTA, systemImage: "crown.fill")
                         .font(.system(size: 13, weight: .bold, design: .rounded))
                         .foregroundStyle(.black)
                         .frame(maxWidth: .infinity)
