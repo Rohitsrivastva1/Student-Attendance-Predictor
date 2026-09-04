@@ -139,7 +139,19 @@ extension WeeklySchedule {
     /// Number of classes scheduled on the weekday of the given date.
     /// `Calendar.weekday` is 1=Sunday ... 7=Saturday.
     func classes(on date: Date, calendar: Calendar = .current) -> Int {
-        switch calendar.component(.weekday, from: date) {
+        count(weekday: calendar.component(.weekday, from: date))
+    }
+
+    func hours(on date: Date, calendar: Calendar = .current) -> [Int] {
+        hours(weekday: calendar.component(.weekday, from: date))
+    }
+
+    func hasPeriodTimes(on date: Date, calendar: Calendar = .current) -> Bool {
+        hours(on: date, calendar: calendar).isEmpty == false
+    }
+
+    func count(weekday: Int) -> Int {
+        switch weekday {
         case 1: return sunday
         case 2: return monday
         case 3: return tuesday
@@ -148,6 +160,62 @@ extension WeeklySchedule {
         case 6: return friday
         case 7: return saturday
         default: return 0
+        }
+    }
+
+    func hours(weekday: Int) -> [Int] {
+        switch weekday {
+        case 1: return sundayHours
+        case 2: return mondayHours
+        case 3: return tuesdayHours
+        case 4: return wednesdayHours
+        case 5: return thursdayHours
+        case 6: return fridayHours
+        case 7: return saturdayHours
+        default: return []
+        }
+    }
+
+    /// One tap: hour on, hour off. Count follows the chips for that day.
+    mutating func toggleHour(_ hour: Int, weekday: Int) {
+        guard CollegePeriod.gridHours.contains(hour) else { return }
+        var next = Set(hours(weekday: weekday))
+        if next.contains(hour) {
+            next.remove(hour)
+        } else {
+            next.insert(hour)
+        }
+        setHours(Array(next).sorted(), weekday: weekday)
+        setCount(next.count, weekday: weekday)
+    }
+
+    mutating func toggleHour(_ hour: Int, on date: Date, calendar: Calendar = .current) {
+        toggleHour(hour, weekday: calendar.component(.weekday, from: date))
+    }
+
+    private mutating func setHours(_ hours: [Int], weekday: Int) {
+        switch weekday {
+        case 1: sundayHours = hours
+        case 2: mondayHours = hours
+        case 3: tuesdayHours = hours
+        case 4: wednesdayHours = hours
+        case 5: thursdayHours = hours
+        case 6: fridayHours = hours
+        case 7: saturdayHours = hours
+        default: break
+        }
+    }
+
+    private mutating func setCount(_ count: Int, weekday: Int) {
+        switch weekday {
+        case 1: sunday = count
+        case 2: monday = count
+        case 3: tuesday = count
+        case 4: wednesday = count
+        case 5: thursday = count
+        case 6: friday = count
+        case 7: saturday = count
+        default: break
         }
     }
 }

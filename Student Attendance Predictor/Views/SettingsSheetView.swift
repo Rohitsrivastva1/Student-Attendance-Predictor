@@ -19,6 +19,9 @@ struct SettingsSheetView: View {
     @State private var showAdPrivacyChoices = false
     @State private var isShowingProPaywall = false
     @State private var isShowingProfileEditor = false
+    #if DEBUG
+    @State private var isShowingDebugTools = false
+    #endif
     @State private var showRemoveUserDataConfirmation = false
     @State private var isRemovingUserData = false
     @State private var removeUserDataErrorMessage: String?
@@ -333,6 +336,23 @@ struct SettingsSheetView: View {
                         .font(.system(size: 12, weight: .medium, design: .rounded))
                         .foregroundStyle(.secondary)
                 }
+
+                #if DEBUG
+                Section {
+                    Toggle(isOn: debugProBinding) {
+                        Label("Debug Pro", systemImage: "hammer.fill")
+                    }
+                    Button {
+                        isShowingDebugTools = true
+                    } label: {
+                        Label("More debug tools", systemImage: "ladybug.fill")
+                    }
+                } header: {
+                    Text("Debug")
+                } footer: {
+                    Text("Debug builds only. Toggles Pro without a StoreKit purchase so you can test skip planner and Insights.")
+                }
+                #endif
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
@@ -350,6 +370,11 @@ struct SettingsSheetView: View {
             .sheet(isPresented: $isShowingProfileEditor) {
                 StudentProfileEditorView(subjectStore: subjectStore)
             }
+            #if DEBUG
+            .sheet(isPresented: $isShowingDebugTools) {
+                DebugToolsView()
+            }
+            #endif
             .alert("Ad Privacy", isPresented: Binding(
                 get: { adPrivacyErrorMessage != nil },
                 set: { isPresented in
@@ -414,6 +439,15 @@ struct SettingsSheetView: View {
         }
         return "Add details"
     }
+
+    #if DEBUG
+    private var debugProBinding: Binding<Bool> {
+        Binding(
+            get: { entitlements.isPro },
+            set: { entitlements.setProUnlocked($0) }
+        )
+    }
+    #endif
 
     private func saveDefault() {
         guard let value = Double(defaultRequiredPercentage), (0...100).contains(value) else {

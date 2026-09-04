@@ -5,7 +5,43 @@
 
 import Foundation
 
-struct WeeklySchedule: Codable, Equatable {
+/// One-hour lecture slots from 8am–5pm. Students tap chips; we never ask for start *and* end.
+struct CollegePeriod: Hashable, Identifiable, Comparable {
+    let startHour: Int
+    var id: Int { startHour }
+
+    static let firstHour = 8
+    static let lastHour = 16
+    static let gridHours: [Int] = Array(firstHour...lastHour)
+    static let grid: [CollegePeriod] = gridHours.map { CollegePeriod(startHour: $0) }
+
+    var endHour: Int { startHour + 1 }
+
+    var chipLabel: String { Self.hourLabel(startHour) }
+
+    var rangeLabel: String {
+        "\(Self.hourLabel(startHour))–\(Self.hourLabel(endHour))"
+    }
+
+    static func hourLabel(_ hour: Int) -> String {
+        let h = ((hour % 24) + 24) % 24
+        if h == 0 || h == 12 { return "12" }
+        if h < 12 { return "\(h)" }
+        return "\(h - 12)"
+    }
+
+    static func current(at date: Date = Date(), calendar: Calendar = .current) -> CollegePeriod? {
+        let hour = calendar.component(.hour, from: date)
+        guard gridHours.contains(hour) else { return nil }
+        return CollegePeriod(startHour: hour)
+    }
+
+    static func < (lhs: CollegePeriod, rhs: CollegePeriod) -> Bool {
+        lhs.startHour < rhs.startHour
+    }
+}
+
+struct WeeklySchedule: Equatable {
     var monday: Int
     var tuesday: Int
     var wednesday: Int
@@ -13,6 +49,14 @@ struct WeeklySchedule: Codable, Equatable {
     var friday: Int
     var saturday: Int
     var sunday: Int
+    /// Start hours (8…16) this subject occupies. Empty = count-only legacy day.
+    var mondayHours: [Int]
+    var tuesdayHours: [Int]
+    var wednesdayHours: [Int]
+    var thursdayHours: [Int]
+    var fridayHours: [Int]
+    var saturdayHours: [Int]
+    var sundayHours: [Int]
 
     static let empty = WeeklySchedule(
         monday: 0,
@@ -21,11 +65,87 @@ struct WeeklySchedule: Codable, Equatable {
         thursday: 0,
         friday: 0,
         saturday: 0,
-        sunday: 0
+        sunday: 0,
+        mondayHours: [],
+        tuesdayHours: [],
+        wednesdayHours: [],
+        thursdayHours: [],
+        fridayHours: [],
+        saturdayHours: [],
+        sundayHours: []
     )
 
     var totalPerWeek: Int {
         monday + tuesday + wednesday + thursday + friday + saturday + sunday
+    }
+
+    var hasAnyPeriodTimes: Bool {
+        mondayHours.isEmpty == false
+            || tuesdayHours.isEmpty == false
+            || wednesdayHours.isEmpty == false
+            || thursdayHours.isEmpty == false
+            || fridayHours.isEmpty == false
+            || saturdayHours.isEmpty == false
+            || sundayHours.isEmpty == false
+    }
+}
+
+extension WeeklySchedule: Codable {
+    enum CodingKeys: String, CodingKey {
+        case monday, tuesday, wednesday, thursday, friday, saturday, sunday
+        case mondayHours, tuesdayHours, wednesdayHours, thursdayHours
+        case fridayHours, saturdayHours, sundayHours
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        monday = try container.decodeIfPresent(Int.self, forKey: .monday) ?? 0
+        tuesday = try container.decodeIfPresent(Int.self, forKey: .tuesday) ?? 0
+        wednesday = try container.decodeIfPresent(Int.self, forKey: .wednesday) ?? 0
+        thursday = try container.decodeIfPresent(Int.self, forKey: .thursday) ?? 0
+        friday = try container.decodeIfPresent(Int.self, forKey: .friday) ?? 0
+        saturday = try container.decodeIfPresent(Int.self, forKey: .saturday) ?? 0
+        sunday = try container.decodeIfPresent(Int.self, forKey: .sunday) ?? 0
+        mondayHours = Self.sanitizedHours(try container.decodeIfPresent([Int].self, forKey: .mondayHours) ?? [])
+        tuesdayHours = Self.sanitizedHours(try container.decodeIfPresent([Int].self, forKey: .tuesdayHours) ?? [])
+        wednesdayHours = Self.sanitizedHours(try container.decodeIfPresent([Int].self, forKey: .wednesdayHours) ?? [])
+        thursdayHours = Self.sanitizedHours(try container.decodeIfPresent([Int].self, forKey: .thursdayHours) ?? [])
+        fridayHours = Self.sanitizedHours(try container.decodeIfPresent([Int].self, forKey: .fridayHours) ?? [])
+        saturdayHours = Self.sanitizedHours(try container.decodeIfPresent([Int].self, forKey: .saturdayHours) ?? [])
+        sundayHours = Self.sanitizedHours(try container.decodeIfPresent([Int].self, forKey: .sundayHours) ?? [])
+        syncCountsFromHours()
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(monday, forKey: .monday)
+        try container.encode(tuesday, forKey: .tuesday)
+        try container.encode(wednesday, forKey: .wednesday)
+        try container.encode(thursday, forKey: .thursday)
+        try container.encode(friday, forKey: .friday)
+        try container.encode(saturday, forKey: .saturday)
+        try container.encode(sunday, forKey: .sunday)
+        try container.encode(mondayHours, forKey: .mondayHours)
+        try container.encode(tuesdayHours, forKey: .tuesdayHours)
+        try container.encode(wednesdayHours, forKey: .wednesdayHours)
+        try container.encode(thursdayHours, forKey: .thursdayHours)
+        try container.encode(fridayHours, forKey: .fridayHours)
+        try container.encode(saturdayHours, forKey: .saturdayHours)
+        try container.encode(sundayHours, forKey: .sundayHours)
+    }
+
+    private static func sanitizedHours(_ hours: [Int]) -> [Int] {
+        Array(Set(hours.filter { CollegePeriod.gridHours.contains($0) })).sorted()
+    }
+
+    mutating func syncCountsFromHours() {
+        if mondayHours.isEmpty == false { monday = mondayHours.count }
+        if tuesdayHours.isEmpty == false { tuesday = tuesdayHours.count }
+        if wednesdayHours.isEmpty == false { wednesday = wednesdayHours.count }
+        if thursdayHours.isEmpty == false { thursday = thursdayHours.count }
+        if fridayHours.isEmpty == false { friday = fridayHours.count }
+        if saturdayHours.isEmpty == false { saturday = saturdayHours.count }
+        if sundayHours.isEmpty == false { sunday = sundayHours.count }
     }
 }
 

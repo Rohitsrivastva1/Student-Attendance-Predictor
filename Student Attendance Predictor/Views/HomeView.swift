@@ -51,6 +51,7 @@ struct HomeView: View {
     @State private var skipPlannerDay: Date?
     @State private var highlightMarkToday = false
     @State private var showPostMarkFocusPrompt = false
+    @State private var didAcceptPostMarkFocus = false
     @State private var focusPromptSubject: SubjectSummary?
     @State private var showFocusTimerSheet = false
     @State private var dismissAtRiskSharePrompt = false
@@ -283,22 +284,27 @@ struct HomeView: View {
         } message: {
             Text(reviewPromptCoordinator.dayTwoPromptMessage)
         }
-        .confirmationDialog(
-            focusPromptTitle,
-            isPresented: $showPostMarkFocusPrompt,
-            titleVisibility: .visible
-        ) {
-            Button("Focus 25 min") {
-                startFocusAfterMark(minutes: 25)
-            }
-            Button("Focus 15 min") {
-                startFocusAfterMark(minutes: 15)
-            }
-            Button("Not now", role: .cancel) {
+        .sheet(isPresented: $showPostMarkFocusPrompt, onDismiss: {
+            if didAcceptPostMarkFocus == false {
                 AnalyticsService.shared.log(.postMarkFocusPromptDismissed)
             }
-        } message: {
-            Text("Stay in Bunk Planner — timer tags your subject automatically.")
+            didAcceptPostMarkFocus = false
+        }) {
+            PostMarkFocusSheet(
+                subjectName: focusPromptSubject?.name,
+                onStart: { minutes in
+                    didAcceptPostMarkFocus = true
+                    showPostMarkFocusPrompt = false
+                    startFocusAfterMark(minutes: minutes)
+                },
+                onDismiss: {
+                    showPostMarkFocusPrompt = false
+                }
+            )
+            .presentationDetents([.height(292)])
+            .presentationDragIndicator(.visible)
+            .presentationCornerRadius(24)
+            .preferredColorScheme(.dark)
         }
         .sheet(isPresented: $showFocusTimerSheet) {
             NavigationStack {
@@ -324,13 +330,6 @@ struct HomeView: View {
                 hasLegacyAttendance: legacyAttendance
             )
         )
-    }
-
-    private var focusPromptTitle: String {
-        if let name = focusPromptSubject?.name {
-            return "Focus on \(name)?"
-        }
-        return "Quick focus session?"
     }
 
     private func startFocusAfterMark(minutes: Int) {
@@ -577,6 +576,19 @@ struct HomeView: View {
                         )
                         .id("markTodayCard")
 
+                        if subjectStore.subjects.isEmpty == false {
+                            TodayBriefingCard(
+                                subjectStore: subjectStore,
+                                deadlineStore: deadlineStore,
+                                isPro: entitlements.isPro,
+                                onBunkToday: {
+                                    triggerLightHaptic()
+                                    presentSkipPlannerOrPaywall()
+                                },
+                                onOpenDeadlines: openExamDeadlinesFromWarning
+                            )
+                        }
+
                         if entitlements.isPro == false, hasAttendanceData {
                             proUpsellCard
                         }
@@ -587,7 +599,9 @@ struct HomeView: View {
 
                         atRiskSharePromptCard
 
-                        upcomingExamAttendanceWarning
+                        if subjectStore.subjects.isEmpty {
+                            upcomingExamAttendanceWarning
+                        }
 
                         inputSection
 
@@ -619,17 +633,15 @@ struct HomeView: View {
     private var insightsTabContent: some View {
         phoneScrollWithFABInset {
             ScrollView {
-                VStack(spacing: 24) {
-                    if let progress = SemesterSettings.progress() {
-                        SemesterProgressStrip(progress: progress)
-                    }
-                    weeklySummaryCard
+                VStack(spacing: 20) {
+                    insightsCoachCard
+                    insightsWeekPulse
                     skipPlannerWeekCard
-                    streakAndHighlightsCard
-                    gamificationBadgesCard
                     trendGraphCard
                     subjectForecastCard
-                    proUpsellCard
+                    if entitlements.isPro == false {
+                        proUpsellCard
+                    }
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 24)
@@ -3465,26 +3477,40 @@ struct HomeView: View {
         )
     }
 
-    private var weeklySummaryCard: some View {
+    private var insightsCoachCard: some View {
+        InsightsCoachCard(
+            advice: InsightsCoach.advice(
+                subjects: subjectStore.subjects,
+                skipVerb: studentMarket.skipVerb,
+                skipNounPlural: studentMarket.skipNounPlural,
+                isPro: entitlements.isPro
+            ),
+            subjects: subjectStore.subjects,
+            onSelectSubject: { id in
+                triggerLightHaptic()
+                subjectStore.selectedSubjectID = id
+            }
+        )
+    }
+
+    private var insightsWeekPulse: some View {
         let summary = subjectStore.weeklyAttendanceSummary()
-        let deltaText = summary.percentageDelta >= 0
-            ? "+\(String(format: "%.0f", summary.percentageDelta))%"
-            : "\(String(format: "%.0f", summary.percentageDelta))%"
-
-        return VStack(alignment: .leading, spacing: 14) {
-            Text("This Week")
-                .font(.system(size: 20, weight: .black, design: .rounded))
-                .foregroundStyle(.white)
-
-            HStack(spacing: 10) {
-                insightStat(title: "Attended", value: "\(summary.attendedClasses)")
-                insightStat(title: studentMarket.skipNounPluralTitle, value: "\(summary.missedClasses)")
-                insightStat(title: "Attendance", value: deltaText)
+        let streak = subjectStore.attendanceStreakDays()
+        return InsightsWeekPulseCard(
+            attended: summary.attendedClasses,
+            missed: summary.missedClasses,
+            streak: streak,
+            skipNounPlural: studentMarket.skipNounPluralTitle,
+            onShareStreak: {
+                triggerLightHaptic()
+                shareStreak(days: streak)
+            }
+        )
+        .onAppear {
+            if streak > 0 {
+                AnalyticsService.shared.log(.streakUpdated(days: streak))
             }
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(cardBackground)
     }
 
     private var skipPlannerWeekCard: some View {
@@ -3503,176 +3529,56 @@ struct HomeView: View {
         )
     }
 
-    private var streakAndHighlightsCard: some View {
-        let streak = subjectStore.attendanceStreakDays()
-        let best = subjectStore.bestSubject
-        let worst = subjectStore.worstSubject
-
-        return VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text("Streak")
-                    .font(.system(size: 20, weight: .black, design: .rounded))
-                    .foregroundStyle(.white)
-                Spacer()
-                if streak > 0 {
-                    Button {
-                        triggerLightHaptic()
-                        shareStreak(days: streak)
-                    } label: {
-                        Label("Share", systemImage: "square.and.arrow.up")
-                            .font(.system(size: 12, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
-                            .background(
-                                Capsule(style: .continuous)
-                                    .fill(Color.white.opacity(0.12))
-                                    .overlay(
-                                        Capsule(style: .continuous)
-                                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
-                                    )
-                            )
-                    }
-                    .buttonStyle(PressableButtonStyle())
-                    .accessibilityLabel("Share \(streak)-day streak")
-                }
-            }
-
-            HStack(spacing: 10) {
-                insightStat(title: "Logged", value: "\(streak) days")
-                if let best {
-                    insightStat(title: "Top Performer", value: "\(best.name)\n\(String(format: "%.0f%%", best.currentPercentage))")
-                }
-            }
-
-            if let worst, worst.id != best?.id {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Needs Attention")
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.55))
-                    Text("\(worst.name) · \(String(format: "%.0f%%", worst.currentPercentage))")
-                        .font(.system(size: 16, weight: .heavy, design: .rounded))
-                        .foregroundStyle(Color(red: 1.0, green: 0.45, blue: 0.4))
-                }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(Color.white.opacity(0.05))
-                )
-            }
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(cardBackground)
-        .onAppear {
-            if streak > 0 {
-                AnalyticsService.shared.log(.streakUpdated(days: streak))
-            }
-        }
-    }
-
-    private var gamificationBadgesCard: some View {
-        let summary = subjectStore.weeklyAttendanceSummary()
-        let streak = subjectStore.attendanceStreakDays()
-        let xp = min(999, streak * 25 + summary.attendedClasses * 10 + subjectStore.subjects.filter { $0.status == .safe }.count * 40)
-
-        let badges: [(title: String, subtitle: String, earned: Bool)] = [
-            ("Perfect Week", "No \(studentMarket.skipVerb) this week", summary.missedClasses == 0 && summary.attendedClasses > 0),
-            ("Recovery Master", "Recovered from below target", subjectStore.subjects.contains { $0.currentPercentage >= $0.requiredPercentage && $0.totalClasses > 0 }),
-            ("Consistency Hero", "Logged attendance 7+ days", streak >= 7)
-        ]
-
-        return VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text("Attendance Score")
-                    .font(.system(size: 18, weight: .black, design: .rounded))
-                    .foregroundStyle(.white)
-                Spacer()
-                Text("\(xp) XP")
-                    .font(.system(size: 16, weight: .heavy, design: .rounded))
-                    .foregroundStyle(Color(red: 1.0, green: 0.78, blue: 0.28))
-            }
-
-            ForEach(Array(badges.enumerated()), id: \.offset) { _, badge in
-                HStack(spacing: 12) {
-                    Image(systemName: badge.earned ? "seal.fill" : "seal")
-                        .foregroundStyle(badge.earned ? Color(red: 1.0, green: 0.78, blue: 0.28) : .white.opacity(0.35))
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(badge.title)
-                            .font(.system(size: 14, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white.opacity(badge.earned ? 1 : 0.55))
-                        Text(badge.subtitle)
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.5))
-                    }
-                    Spacer()
-                }
-            }
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(cardBackground)
-    }
-
-    private func insightStat(title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.system(size: 11, weight: .bold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.5))
-            Text(value)
-                .font(.system(size: 16, weight: .heavy, design: .rounded))
-                .foregroundStyle(.white)
-                .lineLimit(2)
-                .minimumScaleFactor(0.8)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.white.opacity(0.05))
-        )
-    }
-
-    private var cardBackground: some View {
-        RoundedRectangle(cornerRadius: 20, style: .continuous)
-            .fill(Color.white.opacity(0.06))
-            .overlay(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
-            )
-    }
-
     private var trendGraphCard: some View {
         let points = trendPointsForSelectedSubject()
         let latest = points.last?.percentage ?? 0
         let minValue = points.map(\.percentage).min() ?? 0
         let maxValue = points.map(\.percentage).max() ?? 0
+        let name = subjectStore.selectedSubjectName
+        let skipVerb = studentMarket.skipVerb
+        let reading: String? = {
+            guard points.count >= 2 else { return nil }
+            let delta = points[points.count - 1].percentage - points[points.count - 2].percentage
+            if delta >= 1 {
+                return "\(name) is up \(String(format: "%.0f", delta)) pts. Buffer is growing."
+            }
+            if delta <= -1 {
+                return "\(name) dropped \(String(format: "%.0f", abs(delta))) pts. Don’t \(skipVerb) this one."
+            }
+            return "\(name) is holding steady."
+        }()
 
         return VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("ATTENDANCE TREND")
-                    .font(.system(size: 12, weight: .black, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.55))
-                    .tracking(1.1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("TREND")
+                        .font(.system(size: 12, weight: .black, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.55))
+                        .tracking(1.1)
+                    Text(name)
+                        .font(.system(size: 15, weight: .heavy, design: .rounded))
+                        .foregroundStyle(.white)
+                }
                 Spacer()
-                Text("\(points.count) pts")
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.55))
             }
 
             if points.count < 2 {
-                Text("Trend graph unlocks after at least 2 updates for this subject.")
+                Text("Log this subject twice and you’ll see whether you’re climbing or slipping.")
                     .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.85))
+                    .foregroundStyle(.white.opacity(0.75))
             } else {
+                if let reading {
+                    Text(reading)
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.85))
+                }
                 AttendanceTrendSparkline(points: points)
                     .frame(height: 90)
 
                 HStack(spacing: 10) {
-                    trendChip(title: "Latest", value: "\(String(format: "%.1f", latest))%")
-                    trendChip(title: "Min", value: "\(String(format: "%.1f", minValue))%")
-                    trendChip(title: "Max", value: "\(String(format: "%.1f", maxValue))%")
+                    trendChip(title: "Now", value: "\(String(format: "%.0f", latest))%")
+                    trendChip(title: "Low", value: "\(String(format: "%.0f", minValue))%")
+                    trendChip(title: "High", value: "\(String(format: "%.0f", maxValue))%")
                 }
             }
         }
@@ -4676,14 +4582,19 @@ private struct TimetableEditorSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Weekly Classes") {
-                    dayStepper("Monday", value: $schedule.monday)
-                    dayStepper("Tuesday", value: $schedule.tuesday)
-                    dayStepper("Wednesday", value: $schedule.wednesday)
-                    dayStepper("Thursday", value: $schedule.thursday)
-                    dayStepper("Friday", value: $schedule.friday)
-                    dayStepper("Saturday", value: $schedule.saturday)
-                    dayStepper("Sunday", value: $schedule.sunday)
+                Section {
+                    Text("Tap each lecture hour. Untapped hours are free.")
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(.secondary)
+                    dayHours("Monday", weekday: 2)
+                    dayHours("Tuesday", weekday: 3)
+                    dayHours("Wednesday", weekday: 4)
+                    dayHours("Thursday", weekday: 5)
+                    dayHours("Friday", weekday: 6)
+                    dayHours("Saturday", weekday: 7)
+                    dayHours("Sunday", weekday: 1)
+                } header: {
+                    Text("Weekly hours")
                 }
 
                 Section("Summary") {
@@ -4763,14 +4674,25 @@ private struct TimetableEditorSheet: View {
         }
     }
 
-    private func dayStepper(_ title: String, value: Binding<Int>) -> some View {
-        Stepper(value: value, in: 0...12) {
+    private func dayHours(_ title: String, weekday: Int) -> some View {
+        let hours = schedule.hours(weekday: weekday)
+        let savedCount = schedule.count(weekday: weekday)
+        return VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text(title)
                 Spacer()
-                Text("\(value.wrappedValue)")
+                Text("\(hours.isEmpty ? savedCount : hours.count)")
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
             }
+            PeriodChipGrid(selectedHours: Set(hours)) { hour in
+                schedule.toggleHour(hour, weekday: weekday)
+            }
+            if hours.isEmpty && savedCount > 0 {
+                Text("\(savedCount) classes saved — tap the hours they happen")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(.secondary)
+            }
         }
+        .padding(.vertical, 4)
     }
 }

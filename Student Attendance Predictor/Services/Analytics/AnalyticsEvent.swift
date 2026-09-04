@@ -47,6 +47,8 @@ enum AnalyticsEvent {
     case subjectLimitHit(totalSubjects: Int)
     case timetableUpdated(classesPerWeek: Int)
     case timetableProjectionApplied
+    case todayBriefingShown(hasTimes: Bool, classCount: Int)
+    case periodHourToggled
 
     // MARK: Feature usage
     case forecastViewed
@@ -248,6 +250,8 @@ extension AnalyticsEvent {
         case .subjectLimitHit: return "subject_limit_hit"
         case .timetableUpdated: return "timetable_updated"
         case .timetableProjectionApplied: return "timetable_projection_applied"
+        case .todayBriefingShown: return "today_briefing_shown"
+        case .periodHourToggled: return "period_hour_toggled"
 
         case .forecastViewed: return "forecast_viewed"
         case .trendViewed: return "trend_viewed"
@@ -389,7 +393,7 @@ extension AnalyticsEvent {
     var parameters: [String: Any] {
         switch self {
         case .appFirstLaunch, .appBackgrounded, .inputsReset, .subjectRenamed,
-             .subjectSelected, .timetableProjectionApplied, .forecastViewed,
+             .subjectSelected, .timetableProjectionApplied, .periodHourToggled, .forecastViewed,
              .trendViewed, .dashboardViewed, .forecastUnlockRequested,
              .forecastUnlocked, .lockedForecastViewed, .markTodayFirstUse,
              .logDayEdited, .retentionDay7, .retentionDay30,
@@ -595,6 +599,9 @@ extension AnalyticsEvent {
 
         case let .timetableUpdated(classesPerWeek):
             return ["classes_per_week": classesPerWeek]
+
+        case let .todayBriefingShown(hasTimes, classCount):
+            return ["has_times": hasTimes, "class_count": classCount]
 
         case let .rewardedAdRequested(placement):
             return ["placement": placement]

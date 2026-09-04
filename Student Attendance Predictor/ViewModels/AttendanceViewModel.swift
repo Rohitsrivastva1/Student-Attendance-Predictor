@@ -640,6 +640,12 @@ final class SubjectStore: ObservableObject {
         return subject.weeklySchedule
     }
 
+    func togglePeriod(_ hour: Int, for subjectID: UUID, on date: Date = Date()) {
+        var schedule = weeklySchedule(for: subjectID)
+        schedule.toggleHour(hour, on: date)
+        updateWeeklySchedule(for: subjectID, schedule: schedule)
+    }
+
     func updateWeeklySchedule(for subjectID: UUID, schedule: WeeklySchedule) {
         let request = SubjectEntity.fetchRequest()
         request.fetchLimit = 1
@@ -790,7 +796,7 @@ final class SubjectStore: ObservableObject {
             schedule: subject.weeklySchedule,
             weeks: weeks,
             holidayClassCount: holidayClassCount,
-            plannedBunks: plannedBunks,
+            plannedBunks:  plannedBunks,
             fallbackClassesPerWeek: hasTimetable ? 0 : fallbackClassesPerWeek
         )
     }
