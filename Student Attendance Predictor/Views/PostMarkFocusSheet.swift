@@ -12,8 +12,8 @@ struct PostMarkFocusSheet: View {
     var onStart: (Int) -> Void
     var onDismiss: () -> Void
 
-    private let cyan = Color(red: 0.32, green: 0.84, blue: 1.0)
-    private let panel = Color(red: 0.09, green: 0.10, blue: 0.14)
+    private let cyan = BrandColor.colorAccentPrimary
+    private let panel = BrandColor.colorSurface
 
     private var title: String {
         if let subjectName, subjectName.isEmpty == false {
@@ -38,7 +38,7 @@ struct PostMarkFocusSheet: View {
             } label: {
                 Text("Start 25 min")
                     .font(.system(size: 16, weight: .heavy, design: .rounded))
-                    .foregroundStyle(Color(red: 0.05, green: 0.06, blue: 0.1))
+                    .foregroundStyle(BrandColor.colorOnAccent)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
                     .background(

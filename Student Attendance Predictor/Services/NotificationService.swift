@@ -110,8 +110,6 @@ enum NotificationService {
 
     static func reschedulePersonalityReminders(context: NotificationContext) {
         let center = UNUserNotificationCenter.current()
-        let calendar = Calendar.current
-        let now = Date()
 
         center.getPendingNotificationRequests { pending in
             let stale = pending
@@ -129,34 +127,8 @@ enum NotificationService {
             if stale.isEmpty == false {
                 center.removePendingNotificationRequests(withIdentifiers: stale)
             }
-
-            NotificationCooldownStore.clearReserved(now: now, calendar: calendar)
-
-            let evenings = scheduleUpcomingEvenings(context: context, now: now, calendar: calendar)
-            let mornings = scheduleUpcomingMornings(context: context, now: now, calendar: calendar)
-            let monday = scheduleNextWeekday(
-                weekday: 2,
-                hour: NotificationPersonalityConfig.mondayHour,
-                slot: .monday,
-                prefix: "personality-monday-",
-                context: context,
-                now: now,
-                calendar: calendar
-            )
-            let friday = scheduleNextWeekday(
-                weekday: 6,
-                hour: NotificationPersonalityConfig.fridayHour,
-                slot: .friday,
-                prefix: "personality-friday-",
-                context: context,
-                now: now,
-                calendar: calendar
-            )
-            let digest = scheduleWeeklyDigest(context: context, now: now, calendar: calendar)
-            if evenings + mornings + monday + friday + digest > 0 {
-                AnalyticsService.shared.log(.notificationScheduled(type: "personality"))
-            }
         }
+        _ = context
     }
 
     /// Day-2 local nudge if the user installed but never used Mark Today.
@@ -225,7 +197,7 @@ enum NotificationService {
         guard notificationsEnabled else { return }
         guard hasSubjects else { return }
         guard hasMarkedToday == false else { return }
-        guard AnalyticsService.shared.hasMarkedAtLeastOnce else { return }
+        guard pendingMarkCount > 0 else { return }
 
         let calendar = Calendar.current
         let now = Date()
@@ -234,11 +206,11 @@ enum NotificationService {
         fireComponents.minute = 0
         guard let fireDate = calendar.date(from: fireComponents), fireDate > now else { return }
 
-        let pending = max(1, pendingMarkCount)
+        let pending = pendingMarkCount
         let content = UNMutableNotificationContent()
         let eveningCopy = NotificationPersonalization.apply(
-            title: pending > 1 ? "Mark \(pending) subjects before bed?" : "Mark today's class?",
-            body: "One tap in Bunk Planner — keep your streak and safe-bunk count accurate."
+            title: pending > 1 ? "Mark \(pending) subjects" : "Mark today's class",
+            body: "Open Bunk Planner — Attend or Missed, one tap."
         )
         content.title = eveningCopy.title
         content.body = eveningCopy.body

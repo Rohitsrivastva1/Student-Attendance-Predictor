@@ -33,8 +33,8 @@ enum InsightsCoach {
         guard active.isEmpty == false else {
             return InsightsAdvice(
                 kind: .empty,
-                title: "Mark a few classes",
-                subtitle: "Insights tells you what to attend or \(skipVerb) once there’s a real log.",
+                title: "Nothing to plan yet",
+                subtitle: "Add a subject on Today, then tap Attend or Missed. Plan tells you what to do next.",
                 subjectID: nil
             )
         }
@@ -59,10 +59,19 @@ enum InsightsCoach {
             lhs.bunkAllowed < rhs.bunkAllowed
         }
         if let tightest, tightest.bunkAllowed == 0 {
+            let pct = Int(tightest.currentPercentage.rounded())
+            if tightest.hasStableSample == false {
+                return InsightsAdvice(
+                    kind: .onTrack,
+                    title: "\(pct)% · you’re on track",
+                    subtitle: "Buffer grows after more classes. Keep marking — we’ll say when a miss is safe.",
+                    subjectID: tightest.id
+                )
+            }
             return InsightsAdvice(
                 kind: .protect,
                 title: "\(tightest.name) has no \(skipVerb) buffer",
-                subtitle: "You’re at \(Int(tightest.currentPercentage.rounded()))% — exactly on target. One miss drops you.",
+                subtitle: "You’re at \(pct)% — exactly on target. One miss drops you.",
                 subjectID: tightest.id
             )
         }

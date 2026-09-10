@@ -13,7 +13,7 @@ struct TermsOfUseView: View {
             VStack(alignment: .leading, spacing: 14) {
                 section(
                     title: "App Use",
-                    body: "Bunk Planner helps you track attendance, run what-if scenarios, view trends and forecasts, manage subjects, and set weekly timetables. All data stays on your device unless you choose to share it."
+                    body: "Bunk Planner helps you track attendance, run what-if scenarios, view trends and forecasts, manage subjects, and set weekly timetables. How we handle data is described in the Privacy Policy."
                 )
 
                 section(
@@ -29,7 +29,7 @@ struct TermsOfUseView: View {
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(Color(red: 0.05, green: 0.06, blue: 0.1).ignoresSafeArea())
+        .background(BrandColor.colorBackground.ignoresSafeArea())
         .navigationTitle("Terms of Use")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

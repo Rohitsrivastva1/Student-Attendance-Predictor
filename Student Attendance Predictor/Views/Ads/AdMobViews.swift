@@ -177,6 +177,7 @@ private struct AdMobBannerContainer: View {
         AdMobBannerHost(placement: placement, isActive: isActive, isLoaded: $isLoaded, adHeight: $adHeight)
             .frame(maxWidth: .infinity)
             .frame(height: isLoaded ? adHeight : 0)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .clipped()
     }
 }
@@ -249,7 +250,7 @@ private final class AdMobBannerHostViewController: UIViewController, BannerViewD
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .clear
+        view.backgroundColor = UIColor(red: 10 / 255, green: 14 / 255, blue: 22 / 255, alpha: 1)
         sdkReadyObserver = NotificationCenter.default.addObserver(
             forName: .adMobSDKDidBecomeReady,
             object: nil,
@@ -404,6 +405,9 @@ private final class AdMobBannerHostViewController: UIViewController, BannerViewD
         banner.delegate = self
         banner.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(banner)
+        banner.layer.cornerRadius = 12
+        banner.clipsToBounds = true
+        view.backgroundColor = UIColor(red: 10 / 255, green: 14 / 255, blue: 22 / 255, alpha: 1)
         NSLayoutConstraint.activate([
             banner.topAnchor.constraint(equalTo: view.topAnchor),
             banner.centerXAnchor.constraint(equalTo: view.centerXAnchor),

@@ -22,4 +22,10 @@ enum SchoolabeAPIConfiguration {
         guard let sync = syncURL else { return nil }
         return sync.deletingLastPathComponent().appendingPathComponent("user-data")
     }
+
+    /// Batched product analytics: screens, session time, setup funnel, daily activity.
+    static var eventsURL: URL? {
+        guard let sync = syncURL else { return nil }
+        return sync.deletingLastPathComponent().appendingPathComponent("events")
+    }
 }

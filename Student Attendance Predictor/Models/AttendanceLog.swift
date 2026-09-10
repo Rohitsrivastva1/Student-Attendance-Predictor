@@ -65,11 +65,11 @@ enum DayMarkStatus {
     var tint: Color {
         switch self {
         case .attendedAll:
-            return Color(red: 0.2, green: 0.9, blue: 0.5)
+            return BrandColor.colorAttend
         case .partial:
-            return Color.orange
+            return BrandColor.colorStreakBadge
         case .missed:
-            return Color.red
+            return BrandColor.colorMissed
         case .holiday:
             return Color.white.opacity(0.35)
         case .unmarked:
@@ -191,6 +191,26 @@ extension WeeklySchedule {
 
     mutating func toggleHour(_ hour: Int, on date: Date, calendar: Calendar = .current) {
         toggleHour(hour, weekday: calendar.component(.weekday, from: date))
+    }
+
+    /// Calendar weekdays (1 = Sunday … 7 = Saturday) that have at least one class.
+    var scheduledWeekdays: Set<Int> {
+        Set((1...7).filter { count(weekday: $0) > 0 })
+    }
+
+    /// Student-friendly setup: tap days, default 1 lecture each. Keeps existing hour chips.
+    mutating func setClassDays(_ weekdays: Set<Int>, classesPerDay: Int = 1) {
+        let lectures = max(1, classesPerDay)
+        for weekday in 1...7 {
+            if weekdays.contains(weekday) {
+                if hours(weekday: weekday).isEmpty && count(weekday: weekday) == 0 {
+                    setCount(lectures, weekday: weekday)
+                }
+            } else {
+                setHours([], weekday: weekday)
+                setCount(0, weekday: weekday)
+            }
+        }
     }
 
     private mutating func setHours(_ hours: [Int], weekday: Int) {

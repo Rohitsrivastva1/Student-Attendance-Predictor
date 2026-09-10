@@ -7,68 +7,81 @@ import SwiftUI
 
 struct GuidedSetupBanner: View {
     let step: GuidedSetupStep
-    var onDismiss: () -> Void
     var onAction: () -> Void
 
-    private let cyan = Color(red: 0.32, green: 0.84, blue: 1.0)
-    private let green = Color(red: 0.2, green: 0.9, blue: 0.5)
+    private let cyan = BrandColor.colorAccentPrimary
+    private let green = BrandColor.colorAttend
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Button(action: onAction) {
-                HStack(alignment: .top, spacing: 12) {
-                    Image(systemName: step == .addSubject ? "books.vertical.fill" : "hand.tap.fill")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundStyle(step == .addSubject ? cyan : green)
-                        .padding(.top, 2)
+        Button(action: onAction) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: iconName)
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(accent)
+                    .padding(.top, 2)
 
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(title)
-                            .font(.system(size: 15, weight: .black, design: .rounded))
-                            .foregroundStyle(.white)
-                        Text(subtitle)
-                            .font(.system(size: 13, weight: .medium, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.65))
-                    }
-
-                    Spacer(minLength: 0)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.system(size: 15, weight: .black, design: .rounded))
+                        .foregroundStyle(.white)
+                    Text(subtitle)
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.65))
                 }
-            }
-            .buttonStyle(PressableButtonStyle())
 
-            Button(action: onDismiss) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.55))
-                    .frame(width: 28, height: 28)
-                    .background(Circle().fill(Color.white.opacity(0.08)))
+                Spacer(minLength: 0)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .padding(.top, 4)
             }
-            .accessibilityLabel("Dismiss guide")
         }
+        .buttonStyle(PressableButtonStyle())
         .padding(14)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color.white.opacity(0.08))
                 .overlay(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke((step == .addSubject ? cyan : green).opacity(0.45), lineWidth: 1.5)
+                        .stroke(accent.opacity(0.45), lineWidth: 1.5)
                 )
         )
+        .accessibilityHint("Opens the next setup step")
+    }
+
+    private var accent: Color {
+        switch step {
+        case .addSubject: return cyan
+        case .setClassDays: return BrandColor.colorPremium
+        case .markToday: return green
+        }
+    }
+
+    private var iconName: String {
+        switch step {
+        case .addSubject: return "books.vertical.fill"
+        case .setClassDays: return "calendar"
+        case .markToday: return "hand.tap.fill"
+        }
     }
 
     private var title: String {
         switch step {
-        case .addSubject: return "Step 1 · Add a subject"
-        case .markToday: return "Step 2 · Mark today"
+        case .addSubject: return "1 · Add a subject"
+        case .setClassDays: return "2 · Which days is class?"
+        case .markToday: return "3 · Attend or Missed?"
         }
     }
 
     private var subtitle: String {
         switch step {
         case .addSubject:
-            return "Tap the book icon above to add your first \(StudentMarketStore.current.courseNoun)."
+            return "Name one paper — Maths, DSA, anything. Tap here."
+        case .setClassDays:
+            return "Tap the days you have this class. Today will hide the rest."
         case .markToday:
-            return "Log today’s class with one tap — that’s how Bunk Planner learns your habit."
+            return "Attend if you went. Missed if you skipped. No class if it was off."
         }
     }
 }
@@ -76,7 +89,7 @@ struct GuidedSetupBanner: View {
 struct SemesterProgressStrip: View {
     let progress: SemesterSettings.Progress
 
-    private let cyan = Color(red: 0.32, green: 0.84, blue: 1.0)
+    private let cyan = BrandColor.colorAccentPrimary
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -96,7 +109,7 @@ struct SemesterProgressStrip: View {
                     Capsule()
                         .fill(
                             LinearGradient(
-                                colors: [cyan, Color(red: 0.2, green: 0.9, blue: 0.5)],
+                                colors: [cyan, BrandColor.colorAttend],
                                 startPoint: .leading,
                                 endPoint: .trailing
                             )
@@ -111,13 +124,6 @@ struct SemesterProgressStrip: View {
                 .foregroundStyle(.white.opacity(0.5))
         }
         .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color.white.opacity(0.05))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(Color.white.opacity(0.1), lineWidth: 1)
-                )
-        )
+        .background(BrandColor.cardFill(cornerRadius: 16))
     }
 }

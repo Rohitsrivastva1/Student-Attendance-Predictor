@@ -31,7 +31,7 @@ struct SettingsSheetView: View {
     @AppStorage("prompt.siriShortcutsTipDismissed") private var siriShortcutsTipDismissed = false
     @State private var didLogSiriTipShown = false
 
-    private let proGold = Color(red: 1.0, green: 0.78, blue: 0.28)
+    private let proGold = BrandColor.colorPremium
 
     init(viewModel: AttendanceViewModel, subjectStore: SubjectStore) {
         self.viewModel = viewModel
@@ -74,16 +74,7 @@ struct SettingsSheetView: View {
                             HStack(spacing: 14) {
                                 ZStack {
                                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .fill(
-                                            LinearGradient(
-                                                colors: [
-                                                    Color(red: 1.0, green: 0.86, blue: 0.42),
-                                                    Color(red: 0.95, green: 0.58, blue: 0.18)
-                                                ],
-                                                startPoint: .topLeading,
-                                                endPoint: .bottomTrailing
-                                            )
-                                        )
+                                        .fill(BrandColor.premiumGradient)
                                         .frame(width: 44, height: 44)
                                     Image(systemName: "crown.fill")
                                         .font(.system(size: 18, weight: .bold))
@@ -372,7 +363,7 @@ struct SettingsSheetView: View {
             }
             #if DEBUG
             .sheet(isPresented: $isShowingDebugTools) {
-                DebugToolsView()
+                DebugToolsView(subjectStore: subjectStore)
             }
             #endif
             .alert("Ad Privacy", isPresented: Binding(
@@ -510,6 +501,7 @@ struct SettingsSheetView: View {
 
     private func openRateUsFlow() {
         AnalyticsService.shared.log(.rateUsTapped)
+        AppStoreReviewPromptCoordinator.shared.markRatedFromSettings()
         Task { @MainActor in
             let opened = await AppStoreReviewOpener.openWriteReview()
             if opened == false {

@@ -189,7 +189,9 @@ struct AttendanceReportPageView: View {
     private func subjectRow(_ subject: SubjectSummary) -> some View {
         let progress = min(max(subject.currentPercentage / 100.0, 0), 1.2)
         let barProgress = min(progress, 1.0)
-        let statusColor = subject.status == .safe ? green : risk
+        let statusColor = subject.hasAttendance == false
+            ? muted
+            : (subject.isAtRisk ? risk : green)
         let action = subject.actionChipLabel
 
         return VStack(alignment: .leading, spacing: 10) {
@@ -207,7 +209,10 @@ struct AttendanceReportPageView: View {
                     .font(.system(size: 16, weight: .black, design: .rounded))
                     .foregroundStyle(statusColor)
 
-                statusPill(subject.status == .safe ? "Safe" : "At risk", color: statusColor)
+                statusPill(
+                    subject.hasAttendance == false ? "Start" : (subject.isAtRisk ? "At risk" : "Safe"),
+                    color: statusColor
+                )
             }
 
             GeometryReader { geo in

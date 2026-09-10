@@ -67,6 +67,10 @@ enum AnalyticsEvent {
     case guidedSetupStepShown(step: String)
     case guidedSetupCompleted
     case guidedSetupDismissed(step: String)
+    case firstRunStepShown(step: String)
+    case firstRunFinished(via: String)
+    /// Ordered setup journey for Schoolabe daily funnel: intro → profile → subject → days → mark.
+    case funnelStep(step: String)
     case holidayPresetApplied(presetID: String, cancelledClasses: Int)
     case widgetPromptShown
     case postMarkFocusPromptShown(subjectName: String)
@@ -196,8 +200,8 @@ enum AnalyticsEvent {
     case rateUsTapped
     case adPrivacyChoicesOpened
     case reviewPromptShown
-    case dayTwoReviewPromptShown
-    case dayTwoReviewPromptAction(action: String)
+    case dayTwoReviewPromptShown(promptCount: Int)
+    case dayTwoReviewPromptAction(action: String, promptCount: Int)
 
     // MARK: Pro IAP
     case proPaywallViewed(source: String)
@@ -269,6 +273,9 @@ extension AnalyticsEvent {
         case .guidedSetupStepShown: return "guided_setup_step"
         case .guidedSetupCompleted: return "guided_setup_completed"
         case .guidedSetupDismissed: return "guided_setup_dismissed"
+        case .firstRunStepShown: return "first_run_step"
+        case .firstRunFinished: return "first_run_finished"
+        case .funnelStep: return "funnel_step"
         case .holidayPresetApplied: return "holiday_preset_applied"
         case .widgetPromptShown: return "widget_prompt_shown"
         case .postMarkFocusPromptShown: return "post_mark_focus_prompt_shown"
@@ -405,7 +412,6 @@ extension AnalyticsEvent {
              .atRiskSharePromptTapped,
              .siriShortcutsTipShown,
              .rateUsTapped, .adPrivacyChoicesOpened, .reviewPromptShown,
-             .dayTwoReviewPromptShown,
              .settingsOpened, .timetableEditorOpened, .shareCancelled,
              .appOpenAdRequested, .appOpenAdShown,
              .proRestoreStarted, .proRestoreSucceeded, .proRestoreFailed,
@@ -486,8 +492,11 @@ extension AnalyticsEvent {
         case let .studentProfileUpdated(source):
             return ["source": source]
 
-        case let .dayTwoReviewPromptAction(action):
-            return ["action": action]
+        case let .dayTwoReviewPromptShown(promptCount):
+            return ["prompt_count": promptCount]
+
+        case let .dayTwoReviewPromptAction(action, promptCount):
+            return ["action": action, "prompt_count": promptCount]
 
         case let .schoolabeSyncSucceeded(subjectCount):
             return ["subject_count": subjectCount]
@@ -592,6 +601,15 @@ extension AnalyticsEvent {
             return ["step": step]
 
         case let .guidedSetupStepShown(step):
+            return ["step": step]
+
+        case let .firstRunStepShown(step):
+            return ["step": step]
+
+        case let .firstRunFinished(via):
+            return ["via": via]
+
+        case let .funnelStep(step):
             return ["step": step]
 
         case let .holidayPresetApplied(presetID, cancelledClasses):

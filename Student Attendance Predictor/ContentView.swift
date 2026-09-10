@@ -8,12 +8,13 @@
 import SwiftUI
 
 struct ContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @State private var subjectStore: SubjectStore?
     @State private var showOnboarding = false
 
     var body: some View {
         ZStack {
-            Color(red: 0.05, green: 0.06, blue: 0.1)
+            BrandColor.colorBackground
                 .ignoresSafeArea()
 
             if let subjectStore {
@@ -68,8 +69,14 @@ struct ContentView: View {
                     subjectCount: store.subjects.count,
                     hasAnalyticsMark: AnalyticsService.shared.hasMarkedAtLeastOnce,
                     hasLegacyAttendance: store.subjects.contains(where: { $0.totalClasses > 0 })
-                )
+                ),
+                hasClassDays: store.subjects.contains { $0.weeklySchedule.totalPerWeek > 0 }
             )
+            AppStoreReviewPromptCoordinator.shared.scheduleDayTwoPromptIfNeeded()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            guard UserDefaults.standard.bool(forKey: "onboarding.didComplete") else { return }
             AppStoreReviewPromptCoordinator.shared.scheduleDayTwoPromptIfNeeded()
         }
         .onReceive(NotificationCenter.default.publisher(for: .attendanceDataChanged)) { _ in

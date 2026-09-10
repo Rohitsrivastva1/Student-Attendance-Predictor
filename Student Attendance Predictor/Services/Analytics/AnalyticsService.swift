@@ -119,6 +119,7 @@ final class AnalyticsService {
         backends.append(ConsoleAnalyticsBackend())
         #endif
 
+        backends.append(SchoolabeAnalyticsBackend.shared)
         backends.forEach { $0.setCollectionEnabled(true) }
         setUserID(userId)
         applyUserProperty(Self.deviceModel, forName: "device_model")
@@ -372,6 +373,7 @@ final class AnalyticsService {
                 self.log(.appBackgrounded)
                 self.endSession()
             }
+            SchoolabeAnalyticsBackend.shared.flushNow()
         }
     }
 

@@ -13,22 +13,22 @@ struct PrivacyPolicyView: View {
             VStack(alignment: .leading, spacing: 14) {
                 section(
                     title: "Overview",
-                    body: "Bunk Planner helps you plan attendance and bunk safely. Attendance is stored on your device and may also sync to Schoolabe so we can improve the product, as described below. During setup we ask for your name, class, and school or college."
+                    body: "Bunk Planner helps you plan attendance and bunk safely. Your data is stored on this device. Some of it may also sync to Schoolabe so we can run and improve the app. We do not sell your data."
                 )
 
                 section(
-                    title: "Profile & attendance sync",
-                    body: "When you use Bunk Planner, we may send to Schoolabe (info@schoolabe.com): your name, optional age, class or degree, school or college; the subjects you create; your full attendance log (date, scheduled/attended class counts, holiday flag per subject-day); whether you opened the app on a given day (last active date); and whether you have Bunk Planner Pro. We do not sell this data. CGPA details are not uploaded through this sync."
+                    title: "Cloud sync",
+                    body: "We may sync the profile you enter, plus your subjects and attendance, to Schoolabe. This is linked to a random identifier on this device — not your Apple ID, email, or phone number. Some things stay only on this device, like CGPA and Focus Timer notes."
                 )
 
                 section(
                     title: "Remove your data",
-                    body: "Settings → About you → Remove my data clears your profile on this device and sets a removal flag on Schoolabe for tracking. Your local attendance history on this phone is not deleted by that action."
+                    body: "Use Settings → About you → Remove my data to clear your profile on this phone and ask Schoolabe to stop using your synced copy. Attendance on this device stays unless you delete it in the app. For any other request, email info@schoolabe.com."
                 )
 
                 section(
-                    title: "Local Data Storage",
-                    body: "The app uses Core Data, UserDefaults, and on-device storage for subjects, attendance history, trends, default settings, and notification preferences. This data stays on your iPhone or iPad unless you back up the device through Apple. If you export a PDF or CSV, that file is created on your device and only leaves it if you choose to share it."
+                    title: "On this device",
+                    body: "Subjects, attendance, settings, and reminders stay on your iPhone or iPad. If you back up with Apple, that backup follows Apple’s privacy policy. Files you export (PDF or CSV) leave the device only if you share them."
                 )
 
                 section(
@@ -38,7 +38,7 @@ struct PrivacyPolicyView: View {
 
                 section(
                     title: "Analytics",
-                    body: "To understand how the app is used and to improve it, Bunk Planner uses Google Firebase Analytics. It collects anonymous, aggregated usage data such as which screens you open, which features you use (for example marking a day), session length, app version, device model, and OS version. This data is tied only to a random, app-generated identifier — not your name, email, or Apple ID — and is not used to read your subject names or attendance numbers. Analytics helps us see which features matter and where the app can be better."
+                    body: "We collect anonymous usage data to understand how the app is used and to improve it. This may include general app activity and session information. It is processed by Google Firebase Analytics and by Schoolabe, and is tied to a random identifier on this device — not your Apple ID, email, or phone number. Advertising measurement stays with Google. We do not sell this data."
                 )
 
                 section(
@@ -53,12 +53,12 @@ struct PrivacyPolicyView: View {
 
                 section(
                     title: "Notifications",
-                    body: "Optional local reminders (attendance alerts, daily mark reminders, and for Pro a Sunday weekly digest) are scheduled on your device only. They do not upload your data to SchoolAbe or third-party servers. You can switch witty copy off in Settings."
+                    body: "Optional local reminders stay on this device. They are not sent to Schoolabe. You can turn them off in Settings."
                 )
 
                 section(
                     title: "What We Do Not Collect",
-                    body: "We do not upload your subject names or attendance records to our servers, and we do not sell your data. Analytics is anonymous and aggregated (see “Analytics”). We do not require tracking permission to use attendance planning, subject management, or core app features."
+                    body: "We do not sell your data. We do not collect your Apple ID, email, or phone number. We do not require tracking permission to use the app."
                 )
 
                 section(
@@ -69,7 +69,7 @@ struct PrivacyPolicyView: View {
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(Color(red: 0.05, green: 0.06, blue: 0.1).ignoresSafeArea())
+        .background(BrandColor.colorBackground.ignoresSafeArea())
         .navigationTitle("Privacy Policy")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

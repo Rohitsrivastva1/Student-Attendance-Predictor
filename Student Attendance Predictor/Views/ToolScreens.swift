@@ -19,8 +19,8 @@ struct SkipPlannerToolScreen: View {
     @State private var selectedDay: Date?
     @State private var isShowingProPaywall = false
 
-    private let cyan = Color(red: 0.32, green: 0.84, blue: 1.0)
-    private let green = Color(red: 0.2, green: 0.9, blue: 0.5)
+    private let cyan = BrandColor.colorAccentPrimary
+    private let green = BrandColor.colorAttend
     private var skipVerb: String { StudentMarketStore.current.skipVerb }
 
     var body: some View {
@@ -158,7 +158,7 @@ struct SemesterForecastToolScreen: View {
     @State private var expandedForecastSubjectIDs: Set<UUID> = []
     @State private var isShowingProPaywall = false
 
-    private let cyan = Color(red: 0.32, green: 0.84, blue: 1.0)
+    private let cyan = BrandColor.colorAccentPrimary
     private var skipVerb: String { StudentMarketStore.current.skipVerb }
 
     var body: some View {
@@ -269,16 +269,7 @@ struct SemesterForecastToolScreen: View {
                 .padding(.vertical, 12)
                 .background(
                     Capsule(style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color(red: 1.0, green: 0.86, blue: 0.42),
-                                    Color(red: 0.95, green: 0.58, blue: 0.18)
-                                ],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        )
+                        .fill(BrandColor.premiumGradient)
                 )
             }
             .buttonStyle(.plain)
@@ -374,7 +365,7 @@ struct SemesterForecastToolScreen: View {
                     VStack(alignment: .trailing, spacing: 6) {
                         Text(String(format: "%.0f%%", item.forecastedPercentage))
                             .font(.system(size: 22, weight: .black, design: .rounded))
-                            .foregroundStyle(item.willFallBelowTarget ? Color.orange : .white)
+                            .foregroundStyle(item.willFallBelowTarget ? BrandColor.colorStreakBadge : .white)
                         forecastStatusBadge(item.riskLevel, color: statusColor)
                     }
 
@@ -448,9 +439,9 @@ struct SemesterForecastToolScreen: View {
 
     private func colorForRiskLevel(_ level: RiskAlertLevel) -> Color {
         switch level {
-        case .stable: return Color(red: 0.2, green: 0.9, blue: 0.5)
-        case .warning: return Color(red: 1.0, green: 0.84, blue: 0.2)
-        case .critical: return Color(red: 1.0, green: 0.35, blue: 0.4)
+        case .stable: return BrandColor.colorAttend
+        case .warning: return BrandColor.colorStreakBadge
+        case .critical: return BrandColor.colorMissed
         }
     }
 }
@@ -469,8 +460,8 @@ struct ExportToolScreen: View {
     @State private var isShowingProPaywall = false
     @State private var proPaywallSource = "pdf_export"
 
-    private let cyan = Color(red: 0.32, green: 0.84, blue: 1.0)
-    private let gold = Color(red: 1.0, green: 0.78, blue: 0.28)
+    private let cyan = BrandColor.colorAccentPrimary
+    private let gold = BrandColor.colorPremium
     private var market: StudentMarket { StudentMarketStore.current }
 
     var body: some View {

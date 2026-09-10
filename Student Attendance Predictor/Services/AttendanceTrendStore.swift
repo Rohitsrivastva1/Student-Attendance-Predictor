@@ -37,6 +37,14 @@ enum AttendanceTrendStore {
         UserDefaults.standard.set(data, forKey: key(for: subjectID))
     }
 
+    #if DEBUG
+    static func replace(subjectID: UUID, points: [AttendanceTrendPoint]) {
+        let trimmed = Array(points.sorted { $0.timestamp < $1.timestamp }.suffix(maxPoints))
+        guard let data = try? JSONEncoder().encode(trimmed) else { return }
+        UserDefaults.standard.set(data, forKey: key(for: subjectID))
+    }
+    #endif
+
     private static func key(for subjectID: UUID) -> String {
         "\(keyPrefix)\(subjectID.uuidString)"
     }

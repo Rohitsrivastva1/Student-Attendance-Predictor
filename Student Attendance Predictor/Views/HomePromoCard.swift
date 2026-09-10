@@ -12,7 +12,7 @@ struct HomePromoCard: View {
     let market: StudentMarket
     var onAction: () -> Void
 
-    private let cyan = Color(red: 0.32, green: 0.84, blue: 1.0)
+    private let cyan = BrandColor.colorAccentPrimary
 
     var body: some View {
         Button(action: onAction) {

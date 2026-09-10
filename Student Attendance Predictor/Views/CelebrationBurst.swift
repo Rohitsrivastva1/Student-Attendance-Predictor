@@ -18,10 +18,10 @@ struct CelebrationBurst: View {
     @State private var burstOpacity: Double = 0
 
     private let palette: [Color] = [
-        Color(red: 0.32, green: 0.84, blue: 1.0),
-        Color(red: 0.2, green: 0.9, blue: 0.5),
-        Color(red: 1.0, green: 0.78, blue: 0.28),
-        Color(red: 1.0, green: 0.45, blue: 0.55),
+        BrandColor.colorAccentPrimary,
+        BrandColor.colorAttend,
+        BrandColor.colorPremium,
+        BrandColor.colorMissed,
         Color.white
     ]
 
@@ -38,10 +38,10 @@ struct CelebrationBurst: View {
 
             Image(systemName: "checkmark.seal.fill")
                 .font(.system(size: 44, weight: .bold))
-                .foregroundStyle(Color(red: 0.2, green: 0.9, blue: 0.5))
+                .foregroundStyle(BrandColor.colorAttend)
                 .scaleEffect(burstScale)
                 .opacity(burstOpacity)
-                .shadow(color: Color(red: 0.2, green: 0.9, blue: 0.5).opacity(0.45), radius: 18)
+                .shadow(color: BrandColor.colorElevation, radius: 10)
         }
         .allowsHitTesting(false)
         .onChange(of: isActive) { _, active in

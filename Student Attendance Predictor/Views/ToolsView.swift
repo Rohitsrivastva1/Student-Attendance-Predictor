@@ -31,13 +31,10 @@ struct ToolsView: View {
 
     private var subjects: [SubjectSummary] { subjectStore.subjects }
     private var market: StudentMarket { StudentMarketStore.current }
-    private var skipVerb: String { market.skipVerb }
 
-    private let cyan = Color(red: 0.32, green: 0.84, blue: 1.0)
-    private let green = Color(red: 0.2, green: 0.9, blue: 0.5)
-    private let gold = Color(red: 1.0, green: 0.78, blue: 0.28)
-    private let coral = Color(red: 1.0, green: 0.45, blue: 0.45)
-    private let purple = Color(red: 0.72, green: 0.55, blue: 1.0)
+    private let cyan = BrandColor.colorAccentPrimary
+    private let gold = BrandColor.colorPremium
+    private let coral = BrandColor.colorMissed
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -91,34 +88,6 @@ struct ToolsView: View {
                 .buttonStyle(.plain)
             }
 
-            toolSection(title: "Planning") {
-                NavigationLink {
-                    SkipPlannerToolScreen(subjectStore: subjectStore)
-                } label: {
-                    ToolHubRow(
-                        icon: "calendar.badge.minus",
-                        tint: green,
-                        title: "Skip Planner",
-                        subtitle: skipPlannerSubtitle,
-                        showsLock: !entitlements.isPro
-                    )
-                }
-                .buttonStyle(.plain)
-
-                NavigationLink {
-                    SemesterForecastToolScreen(subjectStore: subjectStore)
-                } label: {
-                    ToolHubRow(
-                        icon: "chart.line.uptrend.xyaxis",
-                        tint: purple,
-                        title: "Semester Forecast",
-                        subtitle: forecastToolSubtitle,
-                        showsLock: !entitlements.isForecastUnlocked
-                    )
-                }
-                .buttonStyle(.plain)
-            }
-
             toolSection(title: "Reports") {
                 NavigationLink {
                     ExportToolScreen(subjectStore: subjectStore, gpaStore: gpaStore)
@@ -164,7 +133,7 @@ struct ToolsView: View {
             Text("More tools")
                 .font(.system(size: 22, weight: .black, design: .rounded))
                 .foregroundStyle(.white)
-            Text("Focus, planning, grades, and exports — open anytime. Daily attendance stays on Home.")
+            Text("Focus, grades, and extras. Skip planner stays on Plan.")
                 .font(.system(size: 13, weight: .medium, design: .rounded))
                 .foregroundStyle(.white.opacity(0.6))
         }
@@ -226,33 +195,6 @@ struct ToolsView: View {
         return "\(upcoming) upcoming exams and deadlines"
     }
 
-    private var skipPlannerSubtitle: String {
-        if !entitlements.isPro {
-            return "Know which days stay safe before you \(skipVerb)"
-        }
-        if let safest = SkipPlanner.safestSkipDay(subjects: subjects) {
-            let day = safest.date.formatted(.dateTime.weekday(.wide))
-            switch safest.riskLevel {
-            case .safe: return "Safest day: \(day) · all subjects safe"
-            case .mixed: return "Best option: \(day) · mixed risk"
-            default: return "Tap a day to see if you can \(skipVerb)"
-            }
-        }
-        return "Tap a day to see if you can \(skipVerb)"
-    }
-
-    private var forecastToolSubtitle: String {
-        if !entitlements.isForecastUnlocked {
-            return "Project end-of-semester attendance per subject"
-        }
-        let weeks = SemesterSettings.weeksRemaining()
-        let atRisk = subjectStore.dashboardSummary.riskSubjects
-        if atRisk > 0 {
-            return "\(weeks) weeks left · \(atRisk) subject\(atRisk == 1 ? "" : "s") at risk"
-        }
-        return "\(weeks) weeks left · all subjects on track"
-    }
-
     private var exportToolSubtitle: String {
         if !entitlements.isPro {
             return "PDF summary & CSV log · Pro"
@@ -309,7 +251,7 @@ struct ToolHubRow: View {
                     if showsLock {
                         Image(systemName: "lock.fill")
                             .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(Color(red: 1.0, green: 0.78, blue: 0.28))
+                            .foregroundStyle(BrandColor.colorPremium)
                     }
                 }
                 Text(subtitle)

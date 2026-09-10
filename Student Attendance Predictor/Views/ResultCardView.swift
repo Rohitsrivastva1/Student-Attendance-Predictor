@@ -32,12 +32,11 @@ struct ResultCardView: View {
     var body: some View {
         VStack(alignment: alignment, spacing: 6) {
             Text(value)
-                .font(.system(size: isEmphasized ? 26 : 22, weight: .black, design: .rounded))
+                .font(BrandType.display(isEmphasized ? 26 : 22))
                 .foregroundStyle(tint)
-                .shadow(color: tint.opacity(0.6), radius: 8, x: 0, y: 0)
 
             Text(title)
-                .font(.system(size: isEmphasized ? 15 : 14, weight: .semibold, design: .rounded))
+                .font(BrandType.body(isEmphasized ? 15 : 14))
                 .foregroundStyle(Color.white.opacity(0.9))
 
             if let subtitle {

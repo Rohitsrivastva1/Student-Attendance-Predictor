@@ -43,8 +43,8 @@ struct AcademicsView: View {
     @State private var showArchivedTerms = false
     @State private var lastLoggedTargetResult: String?
 
-    private let cyan = Color(red: 0.32, green: 0.84, blue: 1.0)
-    private let coral = Color(red: 1.0, green: 0.45, blue: 0.45)
+    private let cyan = BrandColor.colorAccentPrimary
+    private let coral = BrandColor.colorMissed
 
     var body: some View {
         ScrollView {
@@ -63,7 +63,7 @@ struct AcademicsView: View {
             .padding(.vertical, 16)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(Color(red: 0.05, green: 0.06, blue: 0.1).ignoresSafeArea())
+        .background(BrandColor.colorBackground.ignoresSafeArea())
         .navigationTitle(navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

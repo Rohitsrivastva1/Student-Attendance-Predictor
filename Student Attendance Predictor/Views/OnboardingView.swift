@@ -2,7 +2,7 @@
 //  OnboardingView.swift
 //  Student Attendance Predictor
 //
-//  Lightweight intro + required profile step — under ~30 seconds.
+//  Three visual screens — the only jobs a new student needs.
 //
 
 import SwiftUI
@@ -18,31 +18,25 @@ struct OnboardingView: View {
 
     private var market: StudentMarket { StudentMarketStore.current }
 
-    private var pages: [(icon: String, title: String, body: String, accent: Color)] {
+    private var pages: [(image: BrandIllustration, title: String, body: String, accent: Color)] {
         [
             (
-                "shield.checkerboard",
-                market == .india ? "Know before you bunk" : "Know before you skip",
-                "See exactly how many classes you can safely miss.",
-                Color(red: 0.32, green: 0.84, blue: 1.0)
+                .onboardKnow,
+                market == .india ? "How many can I bunk?" : "How many can I skip?",
+                "Bunk Planner does the 75% math. You just log class.",
+                BrandColor.colorAccentPrimary
             ),
             (
-                "hand.tap.fill",
-                "Track in seconds",
-                "Log today's attendance with one tap.",
-                Color(red: 0.2, green: 0.9, blue: 0.5)
+                .onboardTap,
+                "After class, tap once",
+                "Pick the days you have each paper. Then Attend, Missed, or No class — that’s the habit.",
+                BrandColor.colorAttend
             ),
             (
-                "square.grid.2x2.fill",
-                toolsOnboardingTitle,
-                toolsOnboardingBody,
-                Color(red: 0.72, green: 0.55, blue: 1.0)
-            ),
-            (
-                "bell.badge.fill",
-                "Stay above your target",
-                "Get alerts before your attendance becomes risky.",
-                Color(red: 1.0, green: 0.78, blue: 0.28)
+                .onboardAlert,
+                "We’ll catch you before you drop",
+                "If a subject gets risky, you get a ping — before detention, not after.",
+                BrandColor.colorPremium
             )
         ]
     }
@@ -50,37 +44,10 @@ struct OnboardingView: View {
     private var isProfileStep: Bool { page >= pages.count }
     private var stepCount: Int { pages.count + 1 }
 
-    private var toolsOnboardingTitle: String {
-        switch market {
-        case .india: return "Tools: CGPA & focus"
-        case .unitedKingdom: return "Tools: marks & focus"
-        case .unitedStates, .other: return "Tools: GPA & focus"
-        }
-    }
-
-    private var toolsOnboardingBody: String {
-        switch market {
-        case .india:
-            return "Open Tools for Focus Timer, 10-point CGPA, and exam reminders."
-        case .unitedKingdom:
-            return "Open Tools for Focus Timer, module marks, and exam reminders."
-        case .unitedStates, .other:
-            return "Open Tools for Focus Timer, 4.0 GPA, and exam reminders."
-        }
-    }
-
     var body: some View {
         ZStack {
-            LinearGradient(
-                colors: [
-                    Color(red: 0.05, green: 0.06, blue: 0.10),
-                    Color(red: 0.07, green: 0.08, blue: 0.14),
-                    Color(red: 0.04, green: 0.07, blue: 0.09)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
+            BrandColor.colorBackground
+                .ignoresSafeArea()
 
             if isProfileStep {
                 OnboardingProfileView(
@@ -97,6 +64,15 @@ struct OnboardingView: View {
         }
         .preferredColorScheme(.dark)
         .analyticsScreen(.onboarding)
+        .onAppear {
+            AnalyticsService.shared.log(.funnelStep(step: "onboarding_intro"))
+        }
+        .onChange(of: page) { _, newPage in
+            if newPage >= pages.count {
+                AnalyticsService.shared.log(.funnelStep(step: "profile_form"))
+                AnalyticsService.shared.setScreen(.onboardingProfile)
+            }
+        }
     }
 
     private var introPages: some View {
@@ -125,7 +101,7 @@ struct OnboardingView: View {
             HStack(spacing: 8) {
                 ForEach(0..<stepCount, id: \.self) { index in
                     Capsule()
-                        .fill(index == page ? Color.white : Color.white.opacity(0.25))
+                        .fill(index == page ? pages[min(page, pages.count - 1)].accent : Color.white.opacity(0.22))
                         .frame(width: index == page ? 22 : 8, height: 8)
                         .animation(.easeInOut(duration: 0.2), value: page)
                 }
@@ -143,7 +119,7 @@ struct OnboardingView: View {
                     }
                 }
             } label: {
-                Text(page < pages.count - 1 ? "Next" : "Set up profile")
+                Text(page < pages.count - 1 ? "Next" : "Add your name")
                     .font(.system(size: 17, weight: .heavy, design: .rounded))
                     .foregroundStyle(.black)
                     .frame(maxWidth: .infinity)
@@ -158,33 +134,25 @@ struct OnboardingView: View {
         }
     }
 
-    private func pageContent(_ item: (icon: String, title: String, body: String, accent: Color)) -> some View {
-        VStack(spacing: 28) {
+    private func pageContent(
+        _ item: (image: BrandIllustration, title: String, body: String, accent: Color)
+    ) -> some View {
+        VStack(spacing: 22) {
             Spacer()
-
-            ZStack {
-                Circle()
-                    .fill(item.accent.opacity(0.18))
-                    .frame(width: 140, height: 140)
-                    .blur(radius: 8)
-                Image(systemName: item.icon)
-                    .font(.system(size: 54, weight: .bold))
-                    .foregroundStyle(item.accent)
-            }
-
+            BrandHeroImage(illustration: item.image, size: 248)
             VStack(spacing: 12) {
                 Text(item.title)
-                    .font(.system(size: 28, weight: .black, design: .rounded))
+                    .font(BrandType.display(30))
                     .foregroundStyle(.white)
                     .multilineTextAlignment(.center)
+                    .padding(.horizontal, 16)
 
                 Text(item.body)
-                    .font(.system(size: 16, weight: .medium, design: .rounded))
+                    .font(BrandType.body(16))
                     .foregroundStyle(.white.opacity(0.7))
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 28)
             }
-
             Spacer()
             Spacer()
         }
@@ -201,6 +169,7 @@ struct OnboardingView: View {
 
         StudentProfileStore.shared.save(profile, skipped: false)
         AnalyticsService.shared.log(.studentProfileCompleted(skipped: false))
+        AnalyticsService.shared.log(.funnelStep(step: "profile_done"))
         finishIntro(via: "profile_continue")
         SchoolabeSyncService.shared.scheduleSync(subjectStore: nil)
     }

@@ -13,8 +13,8 @@ struct SkipPlannerSheet: View {
 
     @Environment(\.dismiss) private var dismiss
 
-    private let cyan = Color(red: 0.32, green: 0.84, blue: 1.0)
-    private let green = Color(red: 0.2, green: 0.9, blue: 0.5)
+    private let cyan = BrandColor.colorAccentPrimary
+    private let green = BrandColor.colorAttend
     private var skipVerb: String { StudentMarketStore.current.skipVerb }
 
     var body: some View {
@@ -34,7 +34,7 @@ struct SkipPlannerSheet: View {
                 }
                 .padding(20)
             }
-            .background(Color(red: 0.05, green: 0.06, blue: 0.1).ignoresSafeArea())
+            .background(BrandColor.colorBackground.ignoresSafeArea())
             .navigationTitle("Skip planner")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -77,8 +77,8 @@ struct SkipPlannerSheet: View {
     private var heroTint: Color {
         switch result.riskLevel {
         case .safe: return green
-        case .mixed: return Color.orange
-        case .unsafe: return Color.red
+        case .mixed: return BrandColor.colorStreakBadge
+        case .unsafe: return BrandColor.colorMissed
         case .noClass: return .white
         }
     }
@@ -107,7 +107,7 @@ struct SkipPlannerSheet: View {
     private func impactRow(_ impact: SkipPlannerImpact) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Circle()
-                .fill(impact.staysSafe ? green : Color.red)
+                .fill(impact.staysSafe ? green : BrandColor.colorMissed)
                 .frame(width: 10, height: 10)
                 .padding(.top, 6)
             VStack(alignment: .leading, spacing: 4) {
@@ -123,7 +123,7 @@ struct SkipPlannerSheet: View {
                         : "Still above \(Int(impact.requiredPercentage.rounded()))% — no buffer left")
                      : "Drops below your \(Int(impact.requiredPercentage.rounded()))% target")
                     .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(impact.staysSafe ? green.opacity(0.9) : Color.red.opacity(0.9))
+                    .foregroundStyle(impact.staysSafe ? green.opacity(0.9) : BrandColor.colorMissed.opacity(0.9))
             }
             Spacer(minLength: 0)
         }
@@ -145,31 +145,18 @@ struct SkipPlannerWeekCard: View {
     var onUnlock: () -> Void
     var onSelectDay: (Date) -> Void
 
-    private let cyan = Color(red: 0.32, green: 0.84, blue: 1.0)
-    private let green = Color(red: 0.2, green: 0.9, blue: 0.5)
+    private let green = BrandColor.colorAttend
     private var skipVerb: String { StudentMarketStore.current.skipVerb }
     private var days: [Date] { SkipPlanner.upcomingClassDays(subjects: subjects) }
-
-    private var safeDayCount: Int {
-        days.filter { SkipPlanner.evaluate(date: $0, subjects: subjects).riskLevel == .safe }.count
-    }
 
     private var lockedTeaser: String {
         if days.isEmpty {
             return "Add a timetable — then we’ll tell you which days stay safe."
         }
-        if safeDayCount == 0 {
-            return "We already ran this week. Unlock to see which days you should not \(skipVerb)."
-        }
-        if safeDayCount == 1 {
-            return "1 day this week looks safe. Unlock to see which — before you \(skipVerb) the wrong one."
-        }
-        return "\(safeDayCount) days this week look safe. Unlock to see which — before you \(skipVerb) the wrong one."
+        return "See which days you shouldn’t \(skipVerb), with a forecast included."
     }
 
-    private var lockedCTA: String {
-        safeDayCount > 0 ? "Reveal the safe days" : "Unlock skip planner"
-    }
+    private var lockedCTA: String { "Unlock skip planner" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -188,7 +175,7 @@ struct SkipPlannerWeekCard: View {
                 if isPro == false {
                     Image(systemName: "lock.fill")
                         .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(Color(red: 1.0, green: 0.78, blue: 0.28))
+                        .foregroundStyle(BrandColor.colorPro)
                 }
             }
 
@@ -196,27 +183,22 @@ struct SkipPlannerWeekCard: View {
                 Text("Add a weekly timetable to plan upcoming \(skipVerb)s.")
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.6))
+            } else if isPro {
+                dayStrip(interactive: true)
             } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(days, id: \.timeIntervalSince1970) { day in
-                            dayChip(day)
-                                .frame(width: 52)
-                        }
-                    }
-                }
+                lockedDayPreview
             }
 
             if isPro == false {
                 Button(action: onUnlock) {
                     Label(lockedCTA, systemImage: "crown.fill")
                         .font(.system(size: 13, weight: .bold, design: .rounded))
-                        .foregroundStyle(.black)
+                        .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
                         .background(
                             Capsule(style: .continuous)
-                                .fill(cyan)
+                                .fill(BrandColor.colorPro)
                         )
                 }
                 .buttonStyle(.plain)
@@ -229,55 +211,93 @@ struct SkipPlannerWeekCard: View {
                 .fill(Color.white.opacity(0.06))
                 .overlay(
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                        .stroke(
+                            isPro ? Color.white.opacity(0.12) : BrandColor.colorPro.opacity(0.45),
+                            lineWidth: 1
+                        )
                 )
         )
+        .onAppear {
+            if isPro == false {
+                AnalyticsService.shared.logProCtaShownOnce(surface: "skip_planner")
+            }
+        }
+    }
+
+    private var lockedDayPreview: some View {
+        dayStrip(interactive: false)
+            .blur(radius: 6)
+            .opacity(0.42)
+            .allowsHitTesting(false)
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.black.opacity(0.28))
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .accessibilityHidden(true)
+    }
+
+    private func dayStrip(interactive: Bool) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(days, id: \.timeIntervalSince1970) { day in
+                    if interactive {
+                        dayChip(day)
+                            .frame(width: 52)
+                    } else {
+                        dayChipLabel(day, dimmed: true)
+                            .frame(width: 52)
+                    }
+                }
+            }
+        }
     }
 
     private func dayChip(_ day: Date) -> some View {
         let result = SkipPlanner.evaluate(date: day, subjects: subjects)
+        return Button {
+            onSelectDay(day)
+        } label: {
+            dayChipLabel(day, dimmed: false)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(day.formatted(.dateTime.weekday(.abbreviated))) \(Calendar.current.component(.day, from: day)), \(result.riskLevel.accessibilityLabel)")
+    }
+
+    private func dayChipLabel(_ day: Date, dimmed: Bool) -> some View {
+        let result = SkipPlanner.evaluate(date: day, subjects: subjects)
         let tint: Color = {
             switch result.riskLevel {
             case .safe: return green
-            case .mixed: return Color.orange
-            case .unsafe: return Color.red
+            case .mixed: return BrandColor.colorStreakBadge
+            case .unsafe: return BrandColor.colorMissed
             case .noClass: return .white.opacity(0.3)
             }
         }()
         let weekday = day.formatted(.dateTime.weekday(.abbreviated))
         let number = Calendar.current.component(.day, from: day)
 
-        return Button {
-            if isPro {
-                onSelectDay(day)
-            } else {
-                onUnlock()
-            }
-        } label: {
-            VStack(spacing: 6) {
-                Text(weekday)
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.5))
-                Text("\(number)")
-                    .font(.system(size: 15, weight: .black, design: .rounded))
-                    .foregroundStyle(.white)
-                Circle()
-                    .fill(isPro ? tint : Color.white.opacity(0.25))
-                    .frame(width: 7, height: 7)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.white.opacity(0.06))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(isPro ? tint.opacity(0.45) : Color.white.opacity(0.12), lineWidth: 1)
-                    )
-            )
+        return VStack(spacing: 6) {
+            Text(weekday)
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.5))
+            Text("\(number)")
+                .font(.system(size: 15, weight: .black, design: .rounded))
+                .foregroundStyle(.white)
+            Circle()
+                .fill(dimmed ? Color.white.opacity(0.25) : tint)
+                .frame(width: 7, height: 7)
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("\(weekday) \(number), \(isPro ? result.riskLevel.accessibilityLabel : "locked")")
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.white.opacity(0.06))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(dimmed ? Color.white.opacity(0.12) : tint.opacity(0.45), lineWidth: 1)
+                )
+        )
     }
 }
 

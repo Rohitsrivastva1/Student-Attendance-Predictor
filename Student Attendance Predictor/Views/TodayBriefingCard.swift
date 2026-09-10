@@ -19,8 +19,8 @@ struct TodayBriefingCard: View {
 
     @State private var showDaySheet = false
 
-    private let cyan = Color(red: 0.32, green: 0.84, blue: 1.0)
-    private let green = Color(red: 0.2, green: 0.9, blue: 0.5)
+    private let cyan = BrandColor.colorAccentPrimary
+    private let green = BrandColor.colorAttend
 
     private var skipVerb: String { StudentMarketStore.current.skipVerb }
     private var briefing: TodayBriefing {
@@ -148,8 +148,8 @@ private struct TodayHoursSheet: View {
 
     @Environment(\.dismiss) private var dismiss
 
-    private let cyan = Color(red: 0.32, green: 0.84, blue: 1.0)
-    private let green = Color(red: 0.2, green: 0.9, blue: 0.5)
+    private let cyan = BrandColor.colorAccentPrimary
+    private let green = BrandColor.colorAttend
 
     private var live: TodayBriefing {
         TodayBriefing.build(
@@ -183,7 +183,7 @@ private struct TodayHoursSheet: View {
                         Button(action: onOpenDeadlines) {
                             Text(due)
                                 .font(.system(size: 13, weight: .semibold, design: .rounded))
-                                .foregroundStyle(Color.orange)
+                                .foregroundStyle(BrandColor.colorStreakBadge)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         .buttonStyle(.plain)
@@ -191,7 +191,7 @@ private struct TodayHoursSheet: View {
                 }
                 .padding(20)
             }
-            .background(Color(red: 0.05, green: 0.06, blue: 0.1).ignoresSafeArea())
+            .background(BrandColor.colorBackground.ignoresSafeArea())
             .navigationTitle("Today")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -234,7 +234,7 @@ private struct TodayHoursSheet: View {
                     Spacer()
                     Text(slot.staysSafeIfSkipped ? "OK to \(skipVerb)" : "Attend")
                         .font(.system(size: 12, weight: .bold, design: .rounded))
-                        .foregroundStyle(slot.staysSafeIfSkipped ? green : Color.orange)
+                        .foregroundStyle(slot.staysSafeIfSkipped ? green : BrandColor.colorStreakBadge)
                 }
             }
         }

@@ -22,8 +22,6 @@ struct HomeView: View {
     @State private var isShowingSubjectPicker = false
     @State private var showAdvancedHome = false
     @State private var editingTimetableSubjectID: UUID?
-    @State private var overviewEditingSubjectID: UUID?
-    @State private var overviewEditingName = ""
     @State private var shareItems: [Any] = []
     @State private var isShowingShareSheet = false
     @State private var isBreakdownExpanded = false
@@ -49,11 +47,13 @@ struct HomeView: View {
     @State private var isExportingPDF = false
     @State private var exportErrorMessage: String?
     @State private var skipPlannerDay: Date?
-    @State private var highlightMarkToday = false
+    @State private var isShowingFineTuneEditor = false
     @State private var showPostMarkFocusPrompt = false
     @State private var didAcceptPostMarkFocus = false
     @State private var focusPromptSubject: SubjectSummary?
     @State private var showFocusTimerSheet = false
+    @State private var showFirstRunSetup = false
+    @State private var classDaysSubjectID: UUID?
     @State private var dismissAtRiskSharePrompt = false
     @State private var pendingToolsDeadlines = false
     @ObservedObject private var widgetPrompt = WidgetPromptCoordinator.shared
@@ -64,47 +64,31 @@ struct HomeView: View {
     private var hasAttendanceData: Bool {
         viewModel.totalClasses > 0
     }
+
+    /// Paper whose Safe / At risk % should show on Today. Prefer the selected
+    /// subject; if that one has no marks yet (just added), fall back so the
+    /// status doesn’t vanish after marking the others.
+    private var todayHeroSubject: SubjectSummary? {
+        if let selected = subjectStore.selectedSubject, selected.totalClasses > 0 {
+            return selected
+        }
+        return subjectStore.worstSubject ?? subjectStore.bestSubject
+    }
     
     private var isRegularWidth: Bool {
         horizontalSizeClass == .regular
     }
 
-    /// Light tail padding inside tab scroll views (iPhone FAB clearance uses `safeAreaInset`, not this value).
+    /// Light tail padding inside tab scroll views.
     private var tabScrollBottomPadding: CGFloat { 24 }
 
     @ViewBuilder
     private var bottomChrome: some View {
-        VStack(spacing: 0) {
-            if selectedTab == .home {
-                floatingActionBanner(for: viewModel.result)
-                    .padding(.horizontal, isRegularWidth ? 28 : 20)
-                    .padding(.top, 6)
-                    .padding(.bottom, isRegularWidth ? 6 : 8)
-            }
-            stickyAdBanner
-        }
-    }
-
-    /// iPhone: floating “Attend … next” strip inside scroll `safeAreaInset` so content never sits under it.
-    @ViewBuilder
-    private var phoneFloatingResultStrip: some View {
-        VStack(spacing: 0) {
-            floatingActionBanner(for: viewModel.result)
-                .padding(.horizontal, 20)
-                .padding(.top, 6)
-                .padding(.bottom, 8)
-        }
-        .frame(maxWidth: .infinity)
-        .background(Color(red: 0.05, green: 0.06, blue: 0.1))
+        stickyAdBanner
     }
 
     private func phoneScrollWithFABInset<Content: View>(@ViewBuilder scroll: () -> Content) -> some View {
         scroll()
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                if !isRegularWidth && selectedTab == .home {
-                    phoneFloatingResultStrip
-                }
-            }
     }
 
     var body: some View {
@@ -147,13 +131,46 @@ struct HomeView: View {
                 .onAppear {
                     consumeNotificationRoute(notificationRoute.pendingDestination)
                     refreshGuidedSetup()
+                    presentFirstRunIfNeeded()
+                    presentMissingDaysIfNeeded()
                     SoftPaywallCoordinator.shared.evaluateHabitValuePaywall(
                         daysSinceInstall: AnalyticsService.shared.daysSinceInstall,
                         hasMarkedDay: AnalyticsService.shared.hasMarkedAtLeastOnce
                     )
                 }
-                .onChange(of: subjectStore.subjects.count) { _, _ in
+                .onChange(of: guidedSetup.activeStep) { _, step in
+                    if step == .addSubject {
+                        presentFirstRunIfNeeded()
+                    }
+                }
+                .onChange(of: subjectStore.subjects.count) { oldCount, newCount in
                     refreshGuidedSetup()
+                    if newCount > oldCount, showFirstRunSetup == false, isShowingSubjects == false {
+                        classDaysSubjectID = subjectStore.selectedSubjectID
+                    }
+                    if newCount == 0 {
+                        presentFirstRunIfNeeded()
+                    }
+                }
+                .fullScreenCover(isPresented: $showFirstRunSetup) {
+                    FirstRunSetupView(subjectStore: subjectStore) {
+                        showFirstRunSetup = false
+                        refreshGuidedSetup()
+                    }
+                }
+                .sheet(
+                    isPresented: Binding(
+                        get: { classDaysSubjectID != nil },
+                        set: { if $0 == false { classDaysSubjectID = nil } }
+                    )
+                ) {
+                    if let subjectID = classDaysSubjectID {
+                        ClassDaysSheet(subjectStore: subjectStore, subjectID: subjectID) {
+                            refreshGuidedSetup()
+                        }
+                        .presentationDetents([.large])
+                        .presentationDragIndicator(.visible)
+                    }
                 }
                 .onChange(of: notificationRoute.pendingDestination) { _, destination in
                     consumeNotificationRoute(destination)
@@ -194,6 +211,7 @@ struct HomeView: View {
 
     /// Don't stack a Tools promo on top of the at-risk Pro card.
     private var shouldShowHomePromoCard: Bool {
+        guard subjectStore.subjects.isEmpty == false else { return false }
         if entitlements.isPro { return true }
         return subjectStore.dashboardSummary.riskSubjects == 0
     }
@@ -205,7 +223,6 @@ struct HomeView: View {
             selectedTab = .home
         case .markToday:
             selectedTab = .home
-            highlightMarkToday = true
         case .skipPlanner:
             selectedTab = .home
             presentSkipPlannerOrPaywall()
@@ -228,18 +245,11 @@ struct HomeView: View {
             mainNavigationContent
         }
         .preferredColorScheme(.dark)
-        .navigationTitle(selectedTab.title)
+        .navigationTitle(selectedTab == .home ? "" : selectedTab.title)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(selectedTab == .home ? .hidden : .automatic, for: .navigationBar)
         .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                Button {
-                    triggerLightHaptic()
-                    isShowingSubjects = true
-                } label: {
-                    Image(systemName: "books.vertical.fill")
-                        .foregroundStyle(.white)
-                }
-
+            ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     triggerLightHaptic()
                     AnalyticsService.shared.log(.settingsOpened)
@@ -249,6 +259,28 @@ struct HomeView: View {
                         .foregroundStyle(.white)
                 }
             }
+        }
+        .sheet(isPresented: $isShowingFineTuneEditor) {
+            NavigationStack {
+                ScrollView {
+                    inputSection
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 16)
+                }
+                .background(BrandColor.colorBackground.ignoresSafeArea())
+                .navigationTitle("Fine-tune numbers")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") { isShowingFineTuneEditor = false }
+                            .font(.system(size: 16, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white)
+                    }
+                }
+            }
+            .preferredColorScheme(.dark)
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
         .onChange(of: viewModel.totalClassesInput) { _, _ in
             resetScenarioIfNeeded()
@@ -274,15 +306,21 @@ struct HomeView: View {
         } message: {
             Text("Long-press your Home Screen → tap + → search Bunk Planner to see attendance and safe bunks at a glance.")
         }
-        .alert("Enjoying Bunk Planner?", isPresented: $reviewPromptCoordinator.shouldPresentDayTwoPrompt) {
-            Button("Rate on App Store") {
-                reviewPromptCoordinator.handleRated()
-            }
-            Button("Not now", role: .cancel) {
-                reviewPromptCoordinator.handleDismissed()
-            }
-        } message: {
-            Text(reviewPromptCoordinator.dayTwoPromptMessage)
+        .sheet(isPresented: $reviewPromptCoordinator.shouldPresentDayTwoPrompt, onDismiss: {
+            reviewPromptCoordinator.handleDismissed()
+        }) {
+            DeveloperReviewNoteSheet(
+                onReview: {
+                    reviewPromptCoordinator.handleRated()
+                },
+                onLater: {
+                    reviewPromptCoordinator.handleDismissed()
+                }
+            )
+            .presentationDetents([.height(460)])
+            .presentationDragIndicator(.hidden)
+            .presentationCornerRadius(28)
+            .preferredColorScheme(.dark)
         }
         .sheet(isPresented: $showPostMarkFocusPrompt, onDismiss: {
             if didAcceptPostMarkFocus == false {
@@ -328,7 +366,9 @@ struct HomeView: View {
                 subjectCount: subjectStore.subjects.count,
                 hasAnalyticsMark: AnalyticsService.shared.hasMarkedAtLeastOnce,
                 hasLegacyAttendance: legacyAttendance
-            )
+            ),
+            hasClassDays: subjectStore.subjects.contains { $0.weeklySchedule.totalPerWeek > 0 },
+            hasSomethingToMark: subjectStore.subjectsForMarkToday().isEmpty == false
         )
     }
 
@@ -342,19 +382,6 @@ struct HomeView: View {
         AnalyticsService.shared.log(.postMarkFocusPromptAccepted(minutes: minutes))
         MultiFeatureEngagementStore.record(.focus)
         showFocusTimerSheet = true
-    }
-
-    private func handleAllSubjectsMarkedToday(_ subject: SubjectSummary?) {
-        focusPromptSubject = subject
-        let dayKey = NotificationCooldownStore.dayKey(Date())
-        let key = "prompt.postMarkFocus.\(dayKey)"
-        guard UserDefaults.standard.bool(forKey: key) == false else { return }
-        guard FocusTimerService.shared.phase == .idle else { return }
-        if let subject {
-            AnalyticsService.shared.log(.postMarkFocusPromptShown(subjectName: subject.name))
-        }
-        showPostMarkFocusPrompt = true
-        UserDefaults.standard.set(true, forKey: key)
     }
 
     @ViewBuilder
@@ -390,14 +417,19 @@ struct HomeView: View {
         }
     }
 
-    /// Anchored banner — always on screen, not inside the Home scroll.
+    /// Anchored banner — collapses until filled; sits on the dark canvas.
     @ViewBuilder
     private var stickyAdBanner: some View {
-        AdMobBannerCard(
-            placement: AdMobConfiguration.Placement.home,
-            isActive: true
-        )
-        .background(Color(red: 0.05, green: 0.06, blue: 0.1))
+        if todayHeroSubject != nil, entitlements.isPro == false {
+            AdMobBannerCard(
+                placement: AdMobConfiguration.Placement.home,
+                isActive: true
+            )
+            .padding(.horizontal, 20)
+            .padding(.top, 6)
+            .padding(.bottom, 4)
+            .background(BrandColor.colorBackground)
+        }
     }
 
     private var phoneTabBar: some View {
@@ -410,20 +442,28 @@ struct HomeView: View {
                 } label: {
                     VStack(spacing: 4) {
                         Image(systemName: tab.systemImage)
-                            .font(.system(size: 18, weight: .semibold))
+                            .font(.system(size: 17, weight: .bold))
                         Text(tab.title)
-                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
                     }
-                    .foregroundStyle(selectedTab == tab ? Color.white : Color.white.opacity(0.45))
+                    .foregroundStyle(
+                        selectedTab == tab
+                            ? BrandColor.colorAccentPrimary
+                            : Color.white.opacity(0.42)
+                    )
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
+                    .padding(.vertical, 8)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(selectedTab == tab ? Color.white.opacity(0.12) : Color.clear)
+                    )
                 }
                 .buttonStyle(.plain)
             }
         }
         .padding(.horizontal, 8)
         .padding(.bottom, 4)
-        .background(Color(red: 0.05, green: 0.06, blue: 0.1))
+        .background(BrandColor.colorBackground)
     }
     
     private var ipadTabContainer: some View {
@@ -437,7 +477,7 @@ struct HomeView: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 bottomChrome
                     .frame(maxWidth: .infinity)
-                    .background(Color(red: 0.05, green: 0.06, blue: 0.1))
+                    .background(BrandColor.colorBackground)
             }
         }
         .padding(.horizontal, 20)
@@ -532,7 +572,21 @@ struct HomeView: View {
         phoneScrollWithFABInset {
             ScrollView {
                 VStack(spacing: 24) {
-                    AttendanceLogView(subjectStore: subjectStore)
+                    if subjectStore.subjects.isEmpty {
+                        BrandEmptyState(
+                            illustration: .emptyLog,
+                            title: "No days to show yet",
+                            message: "Add a subject on Today, then tap Attend or Missed. Your month fills in automatically.",
+                            buttonTitle: "Add a subject",
+                            action: {
+                                triggerLightHaptic()
+                                selectedTab = .home
+                                isShowingSubjects = true
+                            }
+                        )
+                    } else {
+                        AttendanceLogView(subjectStore: subjectStore)
+                    }
                     // No banner here — Log previously reused the Insights unit and
                     // doubled requests every tab switch without adding inventory.
                 }
@@ -547,85 +601,47 @@ struct HomeView: View {
 
     private var homeTabContent: some View {
         phoneScrollWithFABInset {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 20) {
-                        compactHeaderSection
-                        if let progress = SemesterSettings.progress() {
-                            SemesterProgressStrip(progress: progress)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    compactHeaderSection
+
+                    if showFirstRunSetup == false, let step = guidedSetup.activeStep {
+                        GuidedSetupBanner(step: step) {
+                            handleGuidedSetupAction(step)
                         }
-                        if let step = guidedSetup.activeStep {
-                            GuidedSetupBanner(step: step) {
-                                guidedSetup.dismiss(step: step)
-                            } onAction: {
-                                handleGuidedSetupAction(step)
-                            }
+                    }
+
+                    if subjectStore.subjects.isEmpty {
+                        welcomeEmptyState
+                    } else {
+                        if let subject = todayHeroSubject {
+                            assistantHeroCard(for: subject)
                         }
-                        subjectPickerChip
+
+                        missingClassDaysCard
 
                         MarkTodayCard(
                             subjectStore: subjectStore,
-                            isHighlighted: highlightMarkToday,
                             onCelebrated: {
                                 refreshGuidedSetup()
                             },
-                            onAllSubjectsMarkedToday: { subject in
-                                handleAllSubjectsMarkedToday(subject)
-                            },
-                            onAddSubject: { isShowingSubjects = true }
+                            onAllSubjectsMarkedToday: { _ in },
+                            onAddSubject: { isShowingSubjects = true },
+                            onSetClassDays: { subjectID in
+                                classDaysSubjectID = subjectID
+                            }
                         )
-                        .id("markTodayCard")
 
-                        if subjectStore.subjects.isEmpty == false {
-                            TodayBriefingCard(
-                                subjectStore: subjectStore,
-                                deadlineStore: deadlineStore,
-                                isPro: entitlements.isPro,
-                                onBunkToday: {
-                                    triggerLightHaptic()
-                                    presentSkipPlannerOrPaywall()
-                                },
-                                onOpenDeadlines: openExamDeadlinesFromWarning
-                            )
-                        }
-
-                        if entitlements.isPro == false, hasAttendanceData {
-                            proUpsellCard
-                        }
-
-                        if shouldShowHomePromoCard {
-                            homeRotatingPromoCard
-                        }
-
-                        atRiskSharePromptCard
-
-                        if subjectStore.subjects.isEmpty {
+                        if nearestExamAttendanceWarning != nil {
                             upcomingExamAttendanceWarning
                         }
-
-                        inputSection
-
-                        if hasAttendanceData {
-                            assistantHeroSection
-                            scenariosDisclosure
-                        }
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 24)
-                    .padding(.bottom, tabScrollBottomPadding)
-                    .frame(maxWidth: isRegularWidth ? 920 : .infinity, alignment: .leading)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                }
-                .onChange(of: highlightMarkToday) { _, highlighted in
-                    guard highlighted else { return }
-                    withAnimation(.easeInOut(duration: 0.45)) {
-                        proxy.scrollTo("markTodayCard", anchor: .center)
-                    }
-                    Task { @MainActor in
-                        try? await Task.sleep(nanoseconds: 3_500_000_000)
-                        highlightMarkToday = false
                     }
                 }
+                .padding(.horizontal, 20)
+                .padding(.top, 8)
+                .padding(.bottom, tabScrollBottomPadding)
+                .frame(maxWidth: isRegularWidth ? 920 : .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .center)
             }
         }
     }
@@ -635,12 +651,13 @@ struct HomeView: View {
             ScrollView {
                 VStack(spacing: 20) {
                     insightsCoachCard
-                    insightsWeekPulse
-                    skipPlannerWeekCard
-                    trendGraphCard
-                    subjectForecastCard
-                    if entitlements.isPro == false {
-                        proUpsellCard
+                    if hasAttendanceData {
+                        insightsWeekPulse
+                        trendGraphCard
+                        skipPlannerWeekCard
+                        if entitlements.isPro {
+                            subjectForecastCard
+                        }
                     }
                 }
                 .padding(.horizontal, 20)
@@ -656,8 +673,20 @@ struct HomeView: View {
         phoneScrollWithFABInset {
             ScrollView {
                 VStack(spacing: 24) {
-                    allSubjectsDashboardCard
-                    overviewSubjectManagerCard
+                    if subjectStore.subjects.isEmpty {
+                        BrandEmptyState(
+                            illustration: .emptySubjects,
+                            title: "Your papers live here",
+                            message: "Add Maths, DSA, whatever you have this semester. Then go back to Today and tap Attend or Missed.",
+                            buttonTitle: "Add a subject",
+                            action: {
+                                triggerLightHaptic()
+                                isShowingSubjects = true
+                            }
+                        )
+                    } else {
+                        allSubjectsDashboardCard
+                    }
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 24)
@@ -671,9 +700,71 @@ struct HomeView: View {
     private func handleGuidedSetupAction(_ step: GuidedSetupStep) {
         switch step {
         case .addSubject:
-            isShowingSubjects = true
+            if subjectStore.subjects.isEmpty {
+                presentFirstRunIfNeeded()
+            } else {
+                isShowingSubjects = true
+            }
+        case .setClassDays:
+            classDaysSubjectID = subjectStore.subjects.first(where: {
+                $0.weeklySchedule.totalPerWeek == 0
+            })?.id ?? subjectStore.selectedSubjectID
         case .markToday:
-            highlightMarkToday = true
+            break
+        }
+    }
+
+    private func presentFirstRunIfNeeded() {
+        guard UserDefaults.standard.bool(forKey: "onboarding.didComplete") else { return }
+        guard subjectStore.subjects.isEmpty else { return }
+        showFirstRunSetup = true
+    }
+
+    private func presentMissingDaysIfNeeded() {
+        guard showFirstRunSetup == false else { return }
+        guard classDaysSubjectID == nil else { return }
+        classDaysSubjectID = subjectsMissingClassDays.first?.id
+    }
+
+    private var subjectsMissingClassDays: [SubjectSummary] {
+        subjectStore.subjects.filter { $0.weeklySchedule.totalPerWeek == 0 }
+    }
+
+    @ViewBuilder
+    private var missingClassDaysCard: some View {
+        if let subject = subjectsMissingClassDays.first {
+            Button {
+                triggerLightHaptic()
+                classDaysSubjectID = subject.id
+            } label: {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: "calendar")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(BrandColor.colorPremium)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("\(subject.name) has no days set")
+                            .font(.system(size: 14, weight: .heavy, design: .rounded))
+                            .foregroundStyle(.white)
+                        Text(
+                            subjectsMissingClassDays.count > 1
+                                ? "Today shows it every day until you pick class days."
+                                : "Today shows this subject every day until you pick class days."
+                        )
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.68))
+                    }
+                    Spacer(minLength: 0)
+                    Text("Set days")
+                        .font(.system(size: 13, weight: .heavy, design: .rounded))
+                        .foregroundStyle(BrandColor.colorOnAccent)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(BrandColor.colorPremium))
+                }
+                .padding(14)
+                .background(BrandColor.cardFill(cornerRadius: 16))
+            }
+            .buttonStyle(PressableButtonStyle())
         }
     }
 
@@ -691,7 +782,7 @@ struct HomeView: View {
                     HStack(alignment: .top, spacing: 12) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.system(size: 16, weight: .bold))
-                            .foregroundStyle(Color.orange)
+                            .foregroundStyle(BrandColor.colorStreakBadge)
                         VStack(alignment: .leading, spacing: 4) {
                             Text(warning.title)
                                 .font(.system(size: 14, weight: .heavy, design: .rounded))
@@ -701,7 +792,7 @@ struct HomeView: View {
                                 .foregroundStyle(.white.opacity(0.7))
                             Text("View in Exam Deadlines →")
                                 .font(.system(size: 12, weight: .bold, design: .rounded))
-                                .foregroundStyle(Color.orange.opacity(0.95))
+                                .foregroundStyle(BrandColor.colorStreakBadge.opacity(0.95))
                                 .padding(.top, 2)
                         }
                         Spacer(minLength: 0)
@@ -713,10 +804,10 @@ struct HomeView: View {
                     .padding(14)
                     .background(
                         RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .fill(Color.orange.opacity(0.12))
+                            .fill(BrandColor.colorStreakBadge.opacity(0.12))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .stroke(Color.orange.opacity(0.35), lineWidth: 1)
+                                    .stroke(BrandColor.colorStreakBadge.opacity(0.28), lineWidth: 1)
                             )
                     )
                 }
@@ -756,155 +847,12 @@ struct HomeView: View {
         return (title, body)
     }
 
-    private var proUpsellCard: some View {
-        Group {
-            if entitlements.isPro == false {
-                let copy = homeProCopy
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 8) {
-                        Image(systemName: copy.atRisk ? "exclamationmark.triangle.fill" : "lock.fill")
-                            .font(.system(size: 13, weight: .bold))
-                            .foregroundStyle(copy.atRisk ? Color.orange : gold)
-                        Text(copy.eyebrow)
-                            .font(.system(size: 11, weight: .black, design: .rounded))
-                            .foregroundStyle(copy.atRisk ? Color.orange : gold)
-                            .tracking(0.6)
-                    }
-
-                    Text(copy.title)
-                        .font(.system(size: 18, weight: .black, design: .rounded))
-                        .foregroundStyle(.white)
-                    Text(copy.body)
-                        .font(.system(size: 13, weight: .medium, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.68))
-
-                    Button {
-                        triggerLightHaptic()
-                        AnalyticsService.shared.log(
-                            .proCtaTapped(surface: copy.surface, action: "go_pro")
-                        )
-                        proPaywallSource = copy.surface
-                        isShowingProPaywall = true
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "crown.fill")
-                            Text(copy.cta)
-                                .font(.system(size: 15, weight: .heavy, design: .rounded))
-                        }
-                        .foregroundStyle(.black.opacity(0.9))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 13)
-                        .background(
-                            Capsule(style: .continuous)
-                                .fill(
-                                    LinearGradient(
-                                        colors: [
-                                            Color(red: 1.0, green: 0.86, blue: 0.42),
-                                            Color(red: 0.95, green: 0.58, blue: 0.18)
-                                        ],
-                                        startPoint: .leading,
-                                        endPoint: .trailing
-                                    )
-                                )
-                        )
-                    }
-                    .buttonStyle(PressableButtonStyle())
-
-                    Text(copy.footnote)
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.42))
-                        .frame(maxWidth: .infinity)
-                }
-                .padding(16)
-                .background(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(copy.atRisk ? Color.orange.opacity(0.10) : Color.white.opacity(0.05))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .stroke(copy.atRisk ? Color.orange.opacity(0.45) : gold.opacity(0.35), lineWidth: 1)
-                        )
-                )
-                .onAppear {
-                    AnalyticsService.shared.logProCtaShownOnce(surface: copy.surface)
-                }
-            }
-        }
-    }
-
-    private var gold: Color { Color(red: 1.0, green: 0.78, blue: 0.28) }
-
-    /// Loss aversion + curiosity gap — numbers from this student's data, not fake scarcity.
-    private var homeProCopy: (eyebrow: String, title: String, body: String, cta: String, footnote: String, surface: String, atRisk: Bool) {
-        let skip = studentMarket.skipVerb
-        let atRisk = subjectStore.dashboardSummary.riskSubjects > 0
-        let recovery = subjectStore.dashboardSummary.mostAtRiskSubject?.recoveryNeeded
-            ?? viewModel.result?.recoveryNeeded
-            ?? 0
-        let bunks = viewModel.result?.status == .safe ? (viewModel.result?.bunkAllowed ?? 0) : 0
-        let safeDays = SkipPlanner.rankedSkipDays(subjects: subjectStore.subjects, limit: 7)
-            .filter { $0.riskLevel == .safe }
-            .count
-        let price = purchaseService.displayPrice
-        let priceBit = price.map { " · \($0)" } ?? ""
-        let footnote = studentMarket == .india
-            ? "Pay once · no monthly · less than a canteen snack"
-            : "Pay once · no subscription · keep it forever"
-
-        if atRisk {
-            let recover = max(1, recovery)
-            return (
-                studentMarket == .india ? "75% RULE" : "AT RISK",
-                studentMarket == .india ? "Don't get detained" : "Don't drop below target",
-                recover == 1
-                    ? "One more miss can cost the semester. See the exact recovery path before you \(skip)."
-                    : "You need \(recover) more classes to climb back. Guessing a \(skip) is how people get stuck.",
-                "See my recovery path\(priceBit)",
-                footnote,
-                "at_risk_home",
-                true
-            )
-        }
-        if safeDays > 0 {
-            return (
-                "WE ALREADY RAN THE MATH",
-                safeDays == 1
-                    ? "1 day this week looks safe"
-                    : "\(safeDays) days this week look safe",
-                "Unlock to see which days — before you \(skip) the wrong one and burn your buffer.",
-                "Reveal the safe days\(priceBit)",
-                footnote,
-                "skip_planner",
-                false
-            )
-        }
-        if bunks > 0 {
-            return (
-                "BUFFER LEFT",
-                bunks == 1 ? "You have 1 safe \(skip) left" : "You have \(bunks) safe \(studentMarket.skipNounPlural) left",
-                "Don't spend them on the wrong lecture. Pro maps the day before you decide.",
-                "Map my safe \(studentMarket.skipNounPlural)\(priceBit)",
-                footnote,
-                "pro_upsell",
-                false
-            )
-        }
-        return (
-            "KNOW BEFORE YOU \(skip.uppercased())",
-            studentMarket == .india ? "Know before you bunk" : "Know before you skip",
-            "Skip planner, forecast, and unlimited subjects — one payment for the whole semester.",
-            "Unlock Pro\(priceBit)",
-            footnote,
-            "pro_upsell",
-            false
-        )
-    }
-
     private var animatedBackground: some View {
         LinearGradient(
             colors: [
-                Color(red: 0.05, green: 0.06, blue: 0.10),
-                Color(red: 0.07, green: 0.08, blue: 0.14),
-                Color(red: 0.04, green: 0.07, blue: 0.09)
+                BrandColor.colorBackground,
+                Color(hex: 0x10141C),
+                BrandColor.colorBackground
             ],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
@@ -912,14 +860,58 @@ struct HomeView: View {
         .ignoresSafeArea()
     }
 
+    private var greetingName: String? {
+        let raw = StudentProfileStore.shared.profile.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard raw.isEmpty == false else { return nil }
+        return raw.split(separator: " ").first.map(String.init)
+    }
+
     private var compactHeaderSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Bunk Planner")
-                .font(.system(size: 28, weight: .black, design: .rounded))
-                .foregroundStyle(.white)
-            Text("Enter classes → see how many you can \(studentMarket.skipVerb).")
-                .font(.system(size: 13, weight: .medium, design: .rounded))
-                .foregroundStyle(.white.opacity(0.6))
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 12) {
+                Text(subjectStore.subjects.isEmpty
+                     ? (greetingName.map { "Hey \($0)" } ?? "Hey")
+                     : (greetingName.map { "Hey \($0)" } ?? "Today"))
+                    .font(BrandType.display(28))
+                    .foregroundStyle(.white)
+                Spacer(minLength: 8)
+                Button {
+                    triggerLightHaptic()
+                    AnalyticsService.shared.log(.settingsOpened)
+                    isShowingSettings = true
+                } label: {
+                    Image(systemName: "gearshape.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 36, height: 36)
+                        .background(Circle().fill(Color.white.opacity(0.1)))
+                }
+                .buttonStyle(PressableButtonStyle())
+                .accessibilityLabel("Settings")
+            }
+
+            if subjectStore.subjects.isEmpty {
+                Text("Add one subject. Then Attend or Missed.")
+                    .font(BrandType.body(13))
+                    .foregroundStyle(.white.opacity(0.58))
+            } else if let progress = SemesterSettings.progress() {
+                Text("Week \(progress.currentWeek) of \(progress.totalWeeks) · \(progress.weeksRemaining) week\(progress.weeksRemaining == 1 ? "" : "s") left")
+                    .font(BrandType.body(13))
+                    .foregroundStyle(.white.opacity(0.58))
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.white.opacity(0.1))
+                        Capsule()
+                            .fill(BrandColor.colorAccentPrimary)
+                            .frame(width: max(6, geo.size.width * progress.fractionComplete))
+                    }
+                }
+                .frame(height: 3)
+            } else {
+                Text("We’ll tell you how many you can \(studentMarket.skipVerb).")
+                    .font(BrandType.body(13))
+                    .foregroundStyle(.white.opacity(0.58))
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -932,7 +924,7 @@ struct HomeView: View {
             HStack(spacing: 12) {
                 Image(systemName: "book.closed.fill")
                     .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(Color(red: 0.32, green: 0.84, blue: 1.0))
+                    .foregroundStyle(BrandColor.colorAccentPrimary)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(subjectStore.selectedSubjectName)
@@ -1016,17 +1008,17 @@ struct HomeView: View {
 
     private var inputSection: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Your numbers")
+            Text("Fine-tune numbers")
                 .font(.system(size: 16, weight: .black, design: .rounded))
                 .foregroundStyle(.white)
 
-            Text("Type totals — result updates as you go.")
+            Text("Only if a total is wrong. Daily logging is Attend / Missed above.")
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(.white.opacity(0.55))
 
-            inputField(title: "TOTAL CLASSES", text: $viewModel.totalClassesInput, keyboardType: .numberPad)
-            inputField(title: "ATTENDED", text: $viewModel.attendedClassesInput, keyboardType: .numberPad)
-            inputField(title: "REQUIRED %", text: $viewModel.requiredPercentageInput, keyboardType: .decimalPad)
+            inputField(title: "CLASSES HELD", text: $viewModel.totalClassesInput, keyboardType: .numberPad)
+            inputField(title: "YOU WENT", text: $viewModel.attendedClassesInput, keyboardType: .numberPad)
+            inputField(title: "NEED %", text: $viewModel.requiredPercentageInput, keyboardType: .decimalPad)
             requiredPresetsRow
             clearInputsButton
             validationBanner
@@ -1034,12 +1026,12 @@ struct HomeView: View {
         .padding(20)
         .background(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(Color.white.opacity(0.06))
+                .fill(BrandColor.colorSurface)
                 .overlay(
                     RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .stroke(Color.white.opacity(0.15), lineWidth: 1)
+                        .stroke(BrandColor.colorBorder, lineWidth: 1)
                 )
-                .shadow(color: Color.black.opacity(0.4), radius: 20, x: 0, y: 10)
+                .shadow(color: BrandColor.colorElevation, radius: 16, y: 8)
         )
     }
 
@@ -1093,10 +1085,10 @@ struct HomeView: View {
                     .padding(.vertical, 8)
                     .background(
                         Capsule(style: .continuous)
-                            .fill(Color.red.opacity(0.2))
+                            .fill(BrandColor.colorMissed.opacity(0.2))
                             .overlay(
                                 Capsule(style: .continuous)
-                                    .stroke(Color.red.opacity(0.35), lineWidth: 1)
+                                    .stroke(BrandColor.colorMissed.opacity(0.35), lineWidth: 1)
                             )
                     )
             }
@@ -1110,66 +1102,77 @@ struct HomeView: View {
 
     @ViewBuilder
     private var assistantHeroSection: some View {
-        if let result = viewModel.result, hasAttendanceData {
-            assistantHeroCard(for: result)
+        if let subject = todayHeroSubject {
+            assistantHeroCard(for: subject)
         } else {
             welcomeEmptyState
         }
     }
 
     private var welcomeEmptyState: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Welcome 👋")
-                .font(.system(size: 28, weight: .black, design: .rounded))
-                .foregroundStyle(.white)
-
-            Text("Let's calculate your attendance.\nAdd your first subject — or mark today's class to get started.")
-                .font(.system(size: 15, weight: .medium, design: .rounded))
-                .foregroundStyle(.white.opacity(0.7))
-                .fixedSize(horizontal: false, vertical: true)
-
-            Button {
+        BrandEmptyState(
+            illustration: .emptyHome,
+            title: "Start with one subject",
+            message: "Add Maths or DSA, then tap Attend or Missed.\nThat’s the whole app.",
+            buttonTitle: "Add a subject",
+            action: {
                 triggerLightHaptic()
-                isShowingSubjectPicker = true
-            } label: {
-                Text("Get Started")
-                    .font(.system(size: 16, weight: .heavy, design: .rounded))
-                    .foregroundStyle(.black)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .background(
-                        Capsule(style: .continuous)
-                            .fill(Color(red: 0.32, green: 0.84, blue: 1.0))
-                    )
+                presentFirstRunIfNeeded()
+                if showFirstRunSetup == false {
+                    isShowingSubjects = true
+                }
             }
-            .buttonStyle(PressableButtonStyle())
-        }
-        .padding(22)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(Color.white.opacity(0.06))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                )
         )
     }
 
-    private func assistantHeroCard(for result: AttendanceResult) -> some View {
+    private func assistantHeroCard(for subject: SubjectSummary) -> some View {
+        let result = AttendanceResult(
+            currentPercentage: subject.currentPercentage,
+            bunkAllowed: subject.bunkAllowed,
+            recoveryNeeded: subject.recoveryNeeded,
+            status: subject.status
+        )
         let isSafe = result.status == .safe
-        let accent = isSafe ? Color(red: 0.2, green: 0.9, blue: 0.5) : Color(red: 1.0, green: 0.35, blue: 0.4)
-        let attendImpact = viewModel.simulatedResult(attendMore: 1)
-        let skipImpact = viewModel.simulatedResult(skipMore: 1)
+        let accent = isSafe ? BrandColor.colorAccentPrimary : BrandColor.colorMissed
+        let attendPct = CalculationService.currentPercentage(
+            attended: subject.attendedClasses + 1,
+            total: subject.totalClasses + 1
+        )
+        let skipPct = CalculationService.currentPercentage(
+            attended: subject.attendedClasses,
+            total: subject.totalClasses + 1
+        )
+        let streak = subject.id == subjectStore.selectedSubjectID
+            ? subjectStore.attendanceStreakDays()
+            : 0
+        let skipLabel = studentMarket.skipVerb
 
-        return VStack(alignment: .leading, spacing: 18) {
-            HStack {
-                Text("Today's Attendance")
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                AttendanceStatusBadge(isSafe: isSafe)
+                Text(subject.name)
                     .font(.system(size: 13, weight: .bold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.55))
-                Spacer()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                Spacer(minLength: 8)
                 Button {
                     triggerLightHaptic()
+                    subjectStore.selectSubject(id: subject.id)
+                    isShowingFineTuneEditor = true
+                } label: {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.8))
+                        .padding(8)
+                        .background(Circle().fill(Color.white.opacity(0.1)))
+                }
+                .buttonStyle(PressableButtonStyle())
+                .accessibilityLabel("Edit numbers")
+
+                Button {
+                    triggerLightHaptic()
+                    subjectStore.selectSubject(id: subject.id)
                     shareResult(result)
                 } label: {
                     Image(systemName: "square.and.arrow.up")
@@ -1179,96 +1182,91 @@ struct HomeView: View {
                         .background(Circle().fill(Color.white.opacity(0.1)))
                 }
                 .buttonStyle(PressableButtonStyle())
+                .accessibilityLabel("Share")
             }
 
-            Text(assistantHeadline(for: result))
-                .font(.system(size: 22, weight: .black, design: .rounded))
-                .foregroundStyle(.white)
-
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Text("\(Int(result.currentPercentage.rounded()))%")
                     .font(.system(size: 48, weight: .black, design: .rounded))
                     .foregroundStyle(accent)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(isSafe ? "Safe to skip" : "Need to attend")
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.55))
-                    Text(isSafe
-                          ? "\(result.bunkAllowed) class\(result.bunkAllowed == 1 ? "" : "es")"
-                          : "\(result.recoveryNeeded) more")
-                        .font(.system(size: 18, weight: .heavy, design: .rounded))
-                        .foregroundStyle(.white)
-                }
-                Spacer()
-            }
-
-            if let selected = subjectStore.selectedSubject {
-                let left = subjectStore.classesLeftThisSemester(
-                    for: selected,
-                    weeks: forecastWeeks,
-                    holidayClassCount: forecastHolidayClasses,
-                    plannedBunks: forecastExpectedAbsences,
-                    fallbackClassesPerWeek: forecastClassesPerWeek
-                )
-                HStack(spacing: 8) {
-                    Image(systemName: "calendar.badge.clock")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(Color(red: 0.32, green: 0.84, blue: 1.0))
-                    Text(left == 1
-                          ? "1 class left this semester"
-                          : "\(left) classes left this semester")
+                if streak >= 2 {
+                    Text("\(streak)-day streak")
                         .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.7))
+                        .foregroundStyle(.white.opacity(0.45))
                 }
             }
+            .padding(.top, -4)
 
-            if let attendImpact, let skipImpact {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Tomorrow")
-                        .font(.system(size: 12, weight: .black, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.5))
-                        .tracking(0.8)
+            Text(heroStatusLine(subject: subject, result: result, skipLabel: skipLabel))
+                .font(.system(size: 16, weight: .heavy, design: .rounded))
+                .foregroundStyle(.white)
 
-                    HStack(spacing: 10) {
-                        tomorrowChip(
-                            title: "Attend",
-                            value: String(format: "%.1f%%", attendImpact.currentPercentage),
-                            tint: Color(red: 0.2, green: 0.9, blue: 0.5)
-                        )
-                        tomorrowChip(
-                            title: "Skip",
-                            value: String(format: "%.1f%%", skipImpact.currentPercentage),
-                            tint: .orange
-                        )
-                    }
+            HStack(spacing: 8) {
+                if subject.hasStableSample {
+                    tomorrowChip(
+                        title: "If you go",
+                        value: String(format: "%.0f%%", attendPct),
+                        tint: BrandColor.colorAttend
+                    )
+                    tomorrowChip(
+                        title: "If you miss",
+                        value: String(format: "%.0f%%", skipPct),
+                        tint: BrandColor.colorMissed
+                    )
+                } else {
+                    tomorrowChip(
+                        title: "If you go",
+                        value: "\(subject.attendedClasses + 1)/\(subject.totalClasses + 1)",
+                        tint: BrandColor.colorAttend
+                    )
+                    tomorrowChip(
+                        title: "If you miss",
+                        value: "\(subject.attendedClasses)/\(subject.totalClasses + 1)",
+                        tint: BrandColor.colorMissed
+                    )
                 }
             }
         }
-        .padding(22)
+        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(Color.white.opacity(0.06))
+                .fill(BrandColor.colorSurface)
                 .overlay(
                     RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .stroke(accent.opacity(0.35), lineWidth: 1.2)
+                        .stroke(accent.opacity(0.28), lineWidth: 1)
                 )
         )
     }
 
+    private func heroStatusLine(subject: SubjectSummary, result: AttendanceResult, skipLabel: String) -> String {
+        if result.status != .safe {
+            return "Need to attend: \(result.recoveryNeeded) more"
+        }
+        if result.bunkAllowed > 0 {
+            let noun = result.bunkAllowed == 1 ? skipLabel : "\(skipLabel)s"
+            return "\(result.bunkAllowed) \(noun) left"
+        }
+        if subject.hasStableSample == false {
+            return "On track · buffer grows after more classes"
+        }
+        return "On the line — one miss drops you"
+    }
+
     private func tomorrowChip(title: String, value: String, tint: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        HStack(spacing: 6) {
             Text(title)
                 .font(.system(size: 12, weight: .bold, design: .rounded))
                 .foregroundStyle(.white.opacity(0.55))
             Text(value)
-                .font(.system(size: 18, weight: .heavy, design: .rounded))
+                .font(.system(size: 14, weight: .heavy, design: .rounded))
                 .foregroundStyle(tint)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+        .padding(.horizontal, 10)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color.white.opacity(0.05))
         )
     }
@@ -1298,149 +1296,6 @@ struct HomeView: View {
                 }
             }
         }
-    }
-
-    private var overviewSubjectManagerCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Manage \(studentMarket.courseNounPluralTitle)")
-                    .font(.system(size: 16, weight: .black, design: .rounded))
-                    .foregroundStyle(.white)
-                Spacer()
-                Button {
-                    triggerLightHaptic()
-                    attemptAddSubject()
-                } label: {
-                    Label("Add", systemImage: "plus")
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
-                }
-                .buttonStyle(PressableButtonStyle())
-            }
-
-            if subjectStore.subjects.isEmpty {
-                Text("No \(studentMarket.courseNounPlural) yet.")
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.8))
-            } else {
-                ForEach(subjectStore.subjects) { subject in
-                    VStack(alignment: .leading, spacing: 10) {
-                        if overviewEditingSubjectID == subject.id {
-                            TextField("Subject name", text: $overviewEditingName)
-                                .textInputAutocapitalization(.words)
-                                .font(.system(size: 14, weight: .semibold, design: .rounded))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 10)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .fill(Color.black.opacity(0.28))
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                                .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                                        )
-                                )
-                        } else {
-                            HStack(spacing: 8) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(subject.name)
-                                        .font(.system(size: 14, weight: .bold, design: .rounded))
-                                        .foregroundStyle(.white)
-                                    Text("Attendance \(String(format: "%.1f%%", subject.currentPercentage))")
-                                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                                        .foregroundStyle(.white.opacity(0.7))
-                                }
-                                Spacer()
-                                if subject.id == subjectStore.selectedSubjectID {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(Color.green)
-                                }
-                            }
-                        }
-
-                        HStack(spacing: 8) {
-                            Button("Use") {
-                                triggerLightHaptic()
-                                subjectStore.selectSubject(subject)
-                            }
-                            .font(.system(size: 12, weight: .bold, design: .rounded))
-                            .buttonStyle(PressableButtonStyle())
-
-                            if overviewEditingSubjectID == subject.id {
-                                Button("Save") {
-                                    triggerLightHaptic()
-                                    subjectStore.renameSubject(id: subject.id, to: overviewEditingName)
-                                    overviewEditingSubjectID = nil
-                                    overviewEditingName = ""
-                                }
-                                .font(.system(size: 12, weight: .bold, design: .rounded))
-                                .buttonStyle(PressableButtonStyle())
-                                .disabled(overviewEditingName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-
-                                Button("Cancel") {
-                                    triggerLightHaptic()
-                                    overviewEditingSubjectID = nil
-                                    overviewEditingName = ""
-                                }
-                                .font(.system(size: 12, weight: .bold, design: .rounded))
-                                .buttonStyle(PressableButtonStyle())
-                            } else {
-                                Button("Rename") {
-                                    triggerLightHaptic()
-                                    overviewEditingSubjectID = subject.id
-                                    overviewEditingName = subject.name
-                                }
-                                .font(.system(size: 12, weight: .bold, design: .rounded))
-                                .buttonStyle(PressableButtonStyle())
-                            }
-
-                            Button("Timetable") {
-                                openTimetableEditor(for: subject.id)
-                            }
-                            .font(.system(size: 12, weight: .bold, design: .rounded))
-                            .buttonStyle(PressableButtonStyle())
-
-                            Button(role: .destructive) {
-                                triggerLightHaptic()
-                                subjectStore.deleteSubject(id: subject.id)
-                                if overviewEditingSubjectID == subject.id {
-                                    overviewEditingSubjectID = nil
-                                    overviewEditingName = ""
-                                }
-                            } label: {
-                                Image(systemName: "trash")
-                            }
-                            .buttonStyle(PressableButtonStyle())
-                        }
-                    }
-                    .padding(.vertical, 6)
-                    .padding(.horizontal, 10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color.white.opacity(0.04))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                            )
-                    )
-                }
-
-                Button("Open Full \(studentMarket.courseNoun.capitalized) Manager") {
-                    isShowingSubjects = true
-                }
-                .font(.system(size: 13, weight: .bold, design: .rounded))
-                .buttonStyle(PressableButtonStyle())
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(Color.white.opacity(0.06))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                )
-        )
     }
 
     private func inputField(title: String, text: Binding<String>, keyboardType: KeyboardType) -> some View {
@@ -1480,7 +1335,7 @@ struct HomeView: View {
             if let validationMessage = viewModel.validationMessage {
                 HStack(spacing: 10) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(Color(red: 1.0, green: 0.4, blue: 0.4))
+                        .foregroundStyle(BrandColor.colorMissed)
                     Text(validationMessage)
                         .font(.system(size: 14, weight: .medium, design: .rounded))
                         .foregroundStyle(Color.white.opacity(0.9))
@@ -1489,10 +1344,10 @@ struct HomeView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(Color(red: 1.0, green: 0.2, blue: 0.2).opacity(0.15))
+                        .fill(BrandColor.colorMissed.opacity(0.15))
                         .overlay(
                             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .stroke(Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.3), lineWidth: 1)
+                                .stroke(BrandColor.colorMissed.opacity(0.3), lineWidth: 1)
                         )
                 )
             }
@@ -1521,8 +1376,8 @@ struct HomeView: View {
 
     private func heroCard(for result: AttendanceResult) -> some View {
         let isSafe = result.status == .safe
-        let primaryStatusColor = isSafe ? Color(red: 0.1, green: 0.8, blue: 0.4) : Color(red: 1.0, green: 0.2, blue: 0.4)
-        let secondaryStatusColor = isSafe ? Color(red: 0.0, green: 0.5, blue: 0.3) : Color(red: 0.8, green: 0.1, blue: 0.2)
+        let primaryStatusColor = isSafe ? BrandColor.colorAccentPrimary : BrandColor.colorMissed
+        let secondaryStatusColor = isSafe ? BrandColor.colorAttend : BrandColor.colorMissed.opacity(0.7)
 
         return VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .center, spacing: 10) {
@@ -1685,7 +1540,7 @@ struct HomeView: View {
         let color: Color = {
             switch riskLevel {
             case .stable:
-                return Color(red: 0.2, green: 0.9, blue: 0.5)
+                return BrandColor.colorAttend
             case .warning:
                 return .orange
             case .critical:
@@ -1743,7 +1598,7 @@ struct HomeView: View {
             if let customResult = viewModel.simulatedResult(attendMore: customAttendCount, skipMore: customMissCount) {
                 Text("Projected attendance: \(String(format: "%.1f%%", customResult.currentPercentage))")
                     .font(.system(size: 14, weight: .bold, design: .rounded))
-                    .foregroundStyle(customResult.status == .safe ? Color.green : Color.orange)
+                    .foregroundStyle(customResult.status == .safe ? BrandColor.colorAttend : BrandColor.colorStreakBadge)
 
                 Text(customResult.status == .safe
                      ? "You can still miss \(customResult.bunkAllowed) more classes safely."
@@ -1782,7 +1637,7 @@ struct HomeView: View {
             HStack(spacing: 8) {
                 Image(systemName: "lock.fill")
                     .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(Color(red: 0.32, green: 0.84, blue: 1.0))
+                    .foregroundStyle(BrandColor.colorAccentPrimary)
                 Text("SUBJECT FORECAST")
                     .font(.system(size: 12, weight: .black, design: .rounded))
                     .foregroundStyle(Color.white.opacity(0.55))
@@ -1797,7 +1652,7 @@ struct HomeView: View {
                 HStack(spacing: 8) {
                     Image(systemName: "chart.line.uptrend.xyaxis")
                         .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(Color(red: 0.32, green: 0.84, blue: 1.0))
+                        .foregroundStyle(BrandColor.colorAccentPrimary)
                     Text(preview)
                         .font(.system(size: 13, weight: .bold, design: .rounded))
                         .foregroundStyle(.white.opacity(0.92))
@@ -1829,16 +1684,7 @@ struct HomeView: View {
                 .padding(.vertical, 12)
                 .background(
                     Capsule(style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color(red: 1.0, green: 0.86, blue: 0.42),
-                                    Color(red: 0.95, green: 0.58, blue: 0.18)
-                                ],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        )
+                        .fill(BrandColor.premiumGradient)
                 )
             }
             .buttonStyle(PressableButtonStyle())
@@ -1957,7 +1803,7 @@ struct HomeView: View {
 
                 Text("\(forecastExpectedAbsences)")
                     .font(.system(size: 40, weight: .black, design: .rounded))
-                    .foregroundStyle(Color(red: 0.32, green: 0.84, blue: 1.0))
+                    .foregroundStyle(BrandColor.colorAccentPrimary)
                     .frame(minWidth: 64)
 
                 Button {
@@ -1987,7 +1833,7 @@ struct HomeView: View {
                 .fill(Color.white.opacity(0.05))
                 .overlay(
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(Color(red: 0.32, green: 0.84, blue: 1.0).opacity(0.28), lineWidth: 1)
+                        .stroke(BrandColor.colorAccentPrimary.opacity(0.28), lineWidth: 1)
                 )
         )
     }
@@ -2013,7 +1859,7 @@ struct HomeView: View {
                     Spacer()
                     Text(showForecastAssumptions ? "Hide" : "Edit")
                         .font(.system(size: 12, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color(red: 0.32, green: 0.84, blue: 1.0))
+                        .foregroundStyle(BrandColor.colorAccentPrimary)
                     Image(systemName: showForecastAssumptions ? "chevron.up" : "chevron.down")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(.white.opacity(0.55))
@@ -2032,7 +1878,7 @@ struct HomeView: View {
                             selection: $semesterStartDate,
                             displayedComponents: .date
                         )
-                        .tint(Color(red: 0.32, green: 0.84, blue: 1.0))
+                        .tint(BrandColor.colorAccentPrimary)
                         .onChange(of: semesterStartDate) { _, newValue in
                             SemesterSettings.startDate = newValue
                             forecastWeeks = SemesterSettings.weeksRemaining()
@@ -2043,14 +1889,14 @@ struct HomeView: View {
                             in: semesterStartDate...,
                             displayedComponents: .date
                         )
-                        .tint(Color(red: 0.32, green: 0.84, blue: 1.0))
+                        .tint(BrandColor.colorAccentPrimary)
                         .onChange(of: semesterEndDate) { _, newValue in
                             SemesterSettings.endDate = newValue
                             forecastWeeks = SemesterSettings.weeksRemaining()
                         }
                         Text("Semester remaining: \(forecastWeeks) week\(forecastWeeks == 1 ? "" : "s")")
                             .font(.system(size: 12, weight: .semibold, design: .rounded))
-                            .foregroundStyle(Color(red: 0.32, green: 0.84, blue: 1.0))
+                            .foregroundStyle(BrandColor.colorAccentPrimary)
                     }
 
                     if showClassesPerWeek {
@@ -2190,7 +2036,7 @@ struct HomeView: View {
                 Spacer()
                 Text(valueLabel)
                     .font(.system(size: 13, weight: .heavy, design: .rounded))
-                    .foregroundStyle(Color(red: 0.32, green: 0.84, blue: 1.0))
+                    .foregroundStyle(BrandColor.colorAccentPrimary)
             }
 
             Text(hint)
@@ -2199,7 +2045,7 @@ struct HomeView: View {
 
             Stepper("", value: value, in: range)
                 .labelsHidden()
-                .tint(Color(red: 0.32, green: 0.84, blue: 1.0))
+                .tint(BrandColor.colorAccentPrimary)
         }
         .padding(.vertical, 4)
     }
@@ -2236,7 +2082,7 @@ struct HomeView: View {
                     VStack(alignment: .trailing, spacing: 6) {
                         Text(String(format: "%.0f%%", item.forecastedPercentage))
                             .font(.system(size: 22, weight: .black, design: .rounded))
-                            .foregroundStyle(item.willFallBelowTarget ? Color.orange : .white)
+                            .foregroundStyle(item.willFallBelowTarget ? BrandColor.colorStreakBadge : .white)
                         forecastStatusBadge(item.riskLevel)
                     }
 
@@ -2267,7 +2113,7 @@ struct HomeView: View {
                     if item.usedFallbackSchedule {
                         Text("No timetable — using \(forecastClassesPerWeek) classes/week. Set a timetable for accuracy.")
                             .font(.system(size: 11, weight: .medium, design: .rounded))
-                            .foregroundStyle(Color(red: 1.0, green: 0.78, blue: 0.28).opacity(0.9))
+                            .foregroundStyle(BrandColor.colorPremium.opacity(0.9))
                     }
                 }
                 .padding(.horizontal, 14)
@@ -2318,7 +2164,7 @@ struct HomeView: View {
             forecastPercentBar(
                 label: "Current",
                 percentage: item.currentPercentage,
-                tint: Color(red: 0.32, green: 0.84, blue: 1.0)
+                tint: BrandColor.colorAccentPrimary
             )
 
             HStack {
@@ -2332,7 +2178,7 @@ struct HomeView: View {
                 .foregroundStyle(
                     item.isStableProjection
                         ? Color.white.opacity(0.45)
-                        : (delta < 0 ? Color.orange : Color(red: 0.2, green: 0.9, blue: 0.5))
+                        : (delta < 0 ? BrandColor.colorStreakBadge : BrandColor.colorAttend)
                 )
                 Spacer()
             }
@@ -2340,7 +2186,7 @@ struct HomeView: View {
             forecastPercentBar(
                 label: "Projected",
                 percentage: item.forecastedPercentage,
-                tint: item.willFallBelowTarget ? Color.orange : Color(red: 0.2, green: 0.9, blue: 0.5)
+                tint: item.willFallBelowTarget ? BrandColor.colorStreakBadge : BrandColor.colorAttend
             )
         }
     }
@@ -2396,11 +2242,23 @@ struct HomeView: View {
         let summary = subjectStore.dashboardSummary
 
         return VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .firstTextBaseline) {
+            HStack(alignment: .center, spacing: 8) {
                 Text("All \(studentMarket.courseNounPluralTitle)")
                     .font(.system(size: 20, weight: .black, design: .rounded))
                     .foregroundStyle(.white)
                 Spacer()
+                Button {
+                    triggerLightHaptic()
+                    isShowingSubjects = true
+                } label: {
+                    Label("Add", systemImage: "plus")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundStyle(BrandColor.colorOnAccent)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Capsule().fill(BrandColor.colorAccentPrimary))
+                }
+                .buttonStyle(PressableButtonStyle())
                 Menu {
                     Button {
                         triggerLightHaptic()
@@ -2455,62 +2313,7 @@ struct HomeView: View {
                     .foregroundStyle(.white.opacity(0.7))
             } else {
                 ForEach(subjectStore.subjects) { subject in
-                    Button {
-                        triggerLightHaptic()
-                        subjectStore.selectSubject(subject)
-                        selectedTab = .home
-                    } label: {
-                        HStack(spacing: 12) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(subject.name)
-                                    .font(.system(size: 16, weight: .bold, design: .rounded))
-                                    .foregroundStyle(.white)
-                                Text(subject.totalClasses > 0
-                                      ? "\(String(format: "%.0f%%", subject.currentPercentage))"
-                                      : "No classes yet")
-                                    .font(.system(size: 22, weight: .black, design: .rounded))
-                                    .foregroundStyle(
-                                        subject.status == .safe
-                                            ? Color(red: 0.2, green: 0.9, blue: 0.5)
-                                            : Color(red: 1.0, green: 0.45, blue: 0.4)
-                                    )
-                                let left = subjectStore.classesLeftThisSemester(
-                                    for: subject,
-                                    weeks: forecastWeeks,
-                                    holidayClassCount: forecastHolidayClasses,
-                                    plannedBunks: forecastExpectedAbsences,
-                                    fallbackClassesPerWeek: forecastClassesPerWeek
-                                )
-                                Text(left == 1 ? "1 class left" : "\(left) classes left")
-                                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                                    .foregroundStyle(.white.opacity(0.5))
-                            }
-                            Spacer()
-                            Text(subject.actionChipLabel)
-                                .font(.system(size: 12, weight: .bold, design: .rounded))
-                                .foregroundStyle(.black)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
-                                .background(
-                                    Capsule(style: .continuous)
-                                        .fill(
-                                            subject.status == .safe
-                                                ? Color(red: 0.2, green: 0.9, blue: 0.5)
-                                                : Color(red: 1.0, green: 0.78, blue: 0.28)
-                                        )
-                                )
-                        }
-                        .padding(14)
-                        .background(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(Color.white.opacity(0.05))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                        .stroke(Color.white.opacity(0.1), lineWidth: 1)
-                                )
-                        )
-                    }
-                    .buttonStyle(PressableButtonStyle())
+                    overviewSubjectRow(subject)
                 }
             }
         }
@@ -2529,13 +2332,93 @@ struct HomeView: View {
         }
     }
 
+    private func overviewSubjectRow(_ subject: SubjectSummary) -> some View {
+        let chipTint: Color = {
+            if subject.hasAttendance == false { return BrandColor.colorPremium }
+            return subject.isAtRisk ? BrandColor.colorMissed : BrandColor.colorAttend
+        }()
+        let percentTint: Color = {
+            if subject.hasAttendance == false { return .white.opacity(0.55) }
+            return subject.isAtRisk ? BrandColor.colorMissed : BrandColor.colorAttend
+        }()
+        let hasDays = subject.weeklySchedule.totalPerWeek > 0
+        let left = subjectStore.classesLeftThisSemester(
+            for: subject,
+            weeks: forecastWeeks,
+            holidayClassCount: forecastHolidayClasses,
+            plannedBunks: forecastExpectedAbsences,
+            fallbackClassesPerWeek: forecastClassesPerWeek
+        )
+
+        return HStack(alignment: .center, spacing: 10) {
+            Button {
+                triggerLightHaptic()
+                AnalyticsService.shared.log(.timetableEditorOpened)
+                classDaysSubjectID = subject.id
+            } label: {
+                HStack(alignment: .center, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(subject.name)
+                            .font(.system(size: 16, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white)
+                        Text(subject.hasAttendance
+                             ? "\(String(format: "%.0f%%", subject.currentPercentage))"
+                             : "No classes yet")
+                            .font(.system(size: 22, weight: .black, design: .rounded))
+                            .foregroundStyle(percentTint)
+                        Text(hasDays
+                             ? (left == 1 ? "1 class left" : "\(left) classes left")
+                             : "Tap to set class days")
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .foregroundStyle(hasDays ? .white.opacity(0.5) : BrandColor.colorPremium)
+                    }
+                    Spacer(minLength: 8)
+                    Text(subject.actionChipLabel)
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Capsule(style: .continuous).fill(chipTint))
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.35))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PressableButtonStyle())
+            .accessibilityLabel("\(subject.name), \(hasDays ? "edit class days" : "set class days")")
+
+            Button(role: .destructive) {
+                triggerLightHaptic()
+                subjectStore.deleteSubject(id: subject.id)
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(BrandColor.colorMissed)
+                    .frame(width: 36, height: 36)
+                    .background(Circle().fill(BrandColor.colorMissed.opacity(0.16)))
+            }
+            .buttonStyle(PressableButtonStyle())
+            .accessibilityLabel("Delete \(subject.name)")
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                )
+        )
+    }
+
     private var facultyDashboardCard: some View {
         allSubjectsDashboardCard
     }
 
     private func progressCard(for result: AttendanceResult) -> some View {
         let progress = min(max(result.currentPercentage / 100, 0), 1)
-        let ringColor = result.status == .safe ? Color(red: 0.15, green: 0.85, blue: 0.5) : Color(red: 1.0, green: 0.3, blue: 0.3)
+        let ringColor = result.status == .safe ? BrandColor.colorAccentPrimary : BrandColor.colorMissed
 
         return VStack(spacing: 14) {
             ZStack {
@@ -2764,17 +2647,6 @@ struct HomeView: View {
             text.wrappedValue = newValue.rounded(.towardZero) == newValue
                 ? String(Int(newValue))
                 : String(format: "%.1f", newValue)
-        }
-    }
-
-    private func attemptAddSubject(named name: String? = nil) {
-        if subjectStore.addSubject(named: name) == false {
-            if SoftPaywallCoordinator.shared.consumeSubjectLimitTrigger() {
-                proPaywallSource = "subject_limit"
-                isShowingProPaywall = true
-            } else {
-                isShowingSubjectLimitAlert = true
-            }
         }
     }
 
@@ -3451,7 +3323,7 @@ struct HomeView: View {
                     title: "Badge",
                     value: days >= 7 ? "Hero" : "Building",
                     detail: days >= 7 ? "7+ day consistency" : "keep logging daily",
-                    tint: Color(red: 1.0, green: 0.78, blue: 0.28)
+                    tint: BrandColor.colorPremium
                 )
                 shareStatCard(
                     title: "Status",
@@ -3486,9 +3358,21 @@ struct HomeView: View {
                 isPro: entitlements.isPro
             ),
             subjects: subjectStore.subjects,
+            isPro: entitlements.isPro,
             onSelectSubject: { id in
                 triggerLightHaptic()
                 subjectStore.selectedSubjectID = id
+            },
+            onEmptyAction: {
+                triggerLightHaptic()
+                selectedTab = .home
+                isShowingSubjects = true
+            },
+            onLockedRecover: {
+                triggerLightHaptic()
+                AnalyticsService.shared.log(.proCtaTapped(surface: "plan_recover", action: "go_pro"))
+                proPaywallSource = "forecast"
+                isShowingProPaywall = true
             }
         )
     }
@@ -3540,10 +3424,10 @@ struct HomeView: View {
             guard points.count >= 2 else { return nil }
             let delta = points[points.count - 1].percentage - points[points.count - 2].percentage
             if delta >= 1 {
-                return "\(name) is up \(String(format: "%.0f", delta)) pts. Buffer is growing."
+                return "Up \(String(format: "%.0f", delta)) pts. Buffer is growing."
             }
             if delta <= -1 {
-                return "\(name) dropped \(String(format: "%.0f", abs(delta))) pts. Don’t \(skipVerb) this one."
+                return "Dropped \(String(format: "%.0f", abs(delta))) pts. Don’t \(skipVerb) this one."
             }
             return "\(name) is holding steady."
         }()
@@ -3599,12 +3483,6 @@ struct HomeView: View {
         }
     }
 
-    private func openTimetableEditor(for subjectID: UUID) {
-        triggerLightHaptic()
-        AnalyticsService.shared.log(.timetableEditorOpened)
-        editingTimetableSubjectID = subjectID
-    }
-
     private func trendPointsForSelectedSubject() -> [AttendanceTrendPoint] {
         guard let subjectID = subjectStore.selectedSubjectID else { return [] }
         return AttendanceTrendStore.load(subjectID: subjectID)
@@ -3654,7 +3532,7 @@ struct HomeView: View {
                 if let attendImpact {
                     Text("If you attend tomorrow → \(String(format: "%.1f%%", attendImpact.currentPercentage))")
                         .font(.system(size: 14, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color(red: 0.2, green: 0.9, blue: 0.5))
+                        .foregroundStyle(BrandColor.colorAttend)
                 }
             }
         }
@@ -3834,7 +3712,7 @@ struct HomeView: View {
                                 .foregroundStyle(.black.opacity(0.9))
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 10)
-                                .background(Capsule().fill(Color(red: 0.32, green: 0.84, blue: 1.0)))
+                                .background(Capsule().fill(BrandColor.colorAccentPrimary))
                         }
                         .buttonStyle(PressableButtonStyle())
                         Button {
@@ -3856,7 +3734,7 @@ struct HomeView: View {
                         .fill(Color.white.opacity(0.05))
                         .overlay(
                             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .stroke(Color.red.opacity(0.35), lineWidth: 1)
+                                .stroke(BrandColor.colorMissed.opacity(0.35), lineWidth: 1)
                         )
                 )
                 .onAppear {
@@ -3893,7 +3771,6 @@ struct HomeView: View {
         switch copy.analytics {
         case "log_morning", "log_evening", "log_today":
             selectedTab = .home
-            highlightMarkToday = true
         case "start_recovery", "skip_plan":
             presentSkipPlannerOrPaywall()
         case "create_subject":
@@ -3905,7 +3782,6 @@ struct HomeView: View {
                 presentSkipPlannerOrPaywall()
             } else {
                 selectedTab = .home
-                highlightMarkToday = true
             }
         }
     }
@@ -3913,20 +3789,20 @@ struct HomeView: View {
     private func contextualFABCopy(for result: AttendanceResult?) -> (title: String, value: String, subtitle: String, tint: Color, analytics: String) {
         let hour = Calendar.current.component(.hour, from: Date())
         let loggedToday = subjectStore.hasLoggedToday()
-        let green = Color(red: 0.2, green: 0.9, blue: 0.5)
-        let red = Color(red: 1.0, green: 0.3, blue: 0.3)
-        let cyan = Color(red: 0.32, green: 0.84, blue: 1.0)
+        let green = BrandColor.colorAttend
+        let red = BrandColor.colorMissed
+        let cyan = BrandColor.colorAccentPrimary
 
-        if !hasAttendanceData {
-            return ("Before semester", "Create your first subject", "Get Started", cyan, "create_subject")
+        if subjectStore.subjects.isEmpty {
+            return ("Start here", "Add your first subject", "Then Attend or Missed", cyan, "create_subject")
         }
         if !loggedToday {
             let pending = subjectStore.subjectsForMarkToday().count
             if hour < 12 {
                 return (
                     "Morning",
-                    pending > 1 ? "Log all \(pending) subjects" : "Log Today's Attendance",
-                    "Mark every subject in one place",
+                    pending > 1 ? "Mark \(pending) subjects" : "Attend or Missed?",
+                    "Attend · Missed · No class",
                     cyan,
                     "log_morning"
                 )
@@ -3934,22 +3810,22 @@ struct HomeView: View {
             if hour >= 17 {
                 return (
                     "Evening",
-                    pending > 1 ? "Don't forget \(pending) subjects" : "Don't forget today's class",
-                    "Log before you sleep",
+                    pending > 1 ? "Finish \(pending) subjects" : "Attend or Missed before you sleep",
+                    "Takes 5 seconds",
                     .orange,
                     "log_evening"
                 )
             }
             return (
                 "Today",
-                pending > 1 ? "Log all \(pending) subjects" : "Log Today's Attendance",
-                "Keep your streak alive",
+                pending > 1 ? "Mark \(pending) subjects" : "Attend or Missed?",
+                "Attend · Missed · No class",
                 cyan,
                 "log_today"
             )
         }
         guard let result else {
-            return ("Today", "Log Today's Attendance", "Keep tracking", cyan, "log_today")
+            return ("Today", "Attend or Missed?", "Keep tracking", cyan, "log_today")
         }
         if isPerfectAttendance(result: result) {
             return ("Perfect attendance", "Maintain your streak", "You're crushing it", green, "maintain_streak")
@@ -3963,11 +3839,11 @@ struct HomeView: View {
     private func colorForRiskLevel(_ level: RiskAlertLevel) -> Color {
         switch level {
         case .stable:
-            return Color(red: 0.2, green: 0.9, blue: 0.5)
+            return BrandColor.colorAttend
         case .warning:
-            return Color(red: 1.0, green: 0.84, blue: 0.2)
+            return BrandColor.colorStreakBadge
         case .critical:
-            return Color(red: 1.0, green: 0.35, blue: 0.4)
+            return BrandColor.colorMissed
         }
     }
 }
@@ -3977,55 +3853,60 @@ private struct AttendanceTrendSparkline: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let width = geometry.size.width
-            let height = geometry.size.height
-            let minimum = points.map(\.percentage).min() ?? 0
-            let maximum = points.map(\.percentage).max() ?? 100
-            let range = max(maximum - minimum, 0.1)
-            let stepX = points.count > 1 ? width / CGFloat(points.count - 1) : width
-
+            let coords = plotCoordinates(in: geometry.size)
             ZStack {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(Color.black.opacity(0.2))
 
                 Path { path in
-                    guard points.isEmpty == false else { return }
-                    for index in points.indices {
-                        let point = points[index]
-                        let x = CGFloat(index) * stepX
-                        let yRatio = (point.percentage - minimum) / range
-                        let y = height - (CGFloat(yRatio) * height)
-                        if index == 0 {
-                            path.move(to: CGPoint(x: x, y: y))
-                        } else {
-                            path.addLine(to: CGPoint(x: x, y: y))
-                        }
+                    guard let first = coords.first else { return }
+                    path.move(to: first)
+                    for point in coords.dropFirst() {
+                        path.addLine(to: point)
                     }
                 }
                 .stroke(
-                    LinearGradient(
-                        colors: [Color(red: 0.22, green: 0.84, blue: 0.95), Color(red: 0.22, green: 0.95, blue: 0.58)],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    ),
+                    BrandColor.colorAccentPrimary,
                     style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round)
                 )
 
-                if let last = points.last {
-                    let x = CGFloat(points.count - 1) * stepX
-                    let yRatio = (last.percentage - minimum) / range
-                    let y = height - (CGFloat(yRatio) * height)
-
-                    Circle()
-                        .fill(Color.white)
-                        .frame(width: 8, height: 8)
-                        .overlay(
-                            Circle().stroke(Color(red: 0.22, green: 0.95, blue: 0.58), lineWidth: 2)
-                        )
-                        .position(x: x, y: y)
+                if let first = coords.first {
+                    endpointDot(at: first)
+                }
+                if coords.count > 1, let last = coords.last {
+                    endpointDot(at: last)
                 }
             }
         }
+    }
+
+    private func plotCoordinates(in size: CGSize) -> [CGPoint] {
+        let insetX: CGFloat = 16
+        let insetY: CGFloat = 12
+        let width = max(size.width - insetX * 2, 1)
+        let height = max(size.height - insetY * 2, 1)
+        let minimum = points.map(\.percentage).min() ?? 0
+        let maximum = points.map(\.percentage).max() ?? 100
+        let range = max(maximum - minimum, 0.1)
+        let stepX = points.count > 1 ? width / CGFloat(points.count - 1) : width
+
+        return points.enumerated().map { index, point in
+            let yRatio = (point.percentage - minimum) / range
+            return CGPoint(
+                x: insetX + CGFloat(index) * stepX,
+                y: insetY + height - (CGFloat(yRatio) * height)
+            )
+        }
+    }
+
+    private func endpointDot(at point: CGPoint) -> some View {
+        Circle()
+            .fill(BrandColor.colorAccentPrimary)
+            .frame(width: 8, height: 8)
+            .overlay(
+                Circle().stroke(Color.white.opacity(0.9), lineWidth: 1.5)
+            )
+            .position(point)
     }
 }
 
@@ -4071,13 +3952,13 @@ private enum HomeTab: CaseIterable {
     var title: String {
         switch self {
         case .home:
-            return "Home"
+            return "Today"
         case .insights:
-            return "Insights"
+            return "Plan"
         case .log:
             return "Log"
         case .overview:
-            return "Overview"
+            return "Subjects"
         case .tools:
             return "More"
         }
@@ -4339,7 +4220,7 @@ private struct SubjectPickerSheet: View {
                                 Spacer()
                                 if subject.id == subjectStore.selectedSubjectID {
                                     Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(Color(red: 0.2, green: 0.9, blue: 0.5))
+                                        .foregroundStyle(BrandColor.colorAttend)
                                 }
                             }
                         }
@@ -4351,7 +4232,8 @@ private struct SubjectPickerSheet: View {
                         TextField("New subject name", text: $newName)
                         Button("Add") {
                             let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-                            if subjectStore.addSubject(named: name.isEmpty ? nil : name) {
+                            guard name.isEmpty == false else { return }
+                            if subjectStore.addSubject(named: name) {
                                 newName = ""
                             } else if SoftPaywallCoordinator.shared.consumeSubjectLimitTrigger() {
                                 isShowingProPaywall = true
@@ -4359,7 +4241,7 @@ private struct SubjectPickerSheet: View {
                                 isShowingSubjectLimitAlert = true
                             }
                         }
-                        .disabled(false)
+                        .disabled(newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
 
                     Button {
@@ -4368,7 +4250,7 @@ private struct SubjectPickerSheet: View {
                             onManageSubjects()
                         }
                     } label: {
-                        Label("Manage subjects & timetables", systemImage: "slider.horizontal.3")
+                        Label("Manage subjects & class days", systemImage: "slider.horizontal.3")
                     }
                 }
             }
@@ -4415,56 +4297,87 @@ private struct SubjectListView: View {
     @State private var isShowingRenamePrompt = false
     @State private var renameSubjectName = ""
     @State private var renamingSubjectID: UUID?
-    @State private var editingTimetableSubjectID: UUID?
+    @State private var classDaysSubjectID: UUID?
     @State private var isShowingSubjectLimitAlert = false
     @State private var isShowingProPaywall = false
 
     var body: some View {
         NavigationStack {
             List {
-                Section("Subjects") {
+                Section {
                     ForEach(subjectStore.subjects) { subject in
-                        Button {
-                            subjectStore.selectSubject(subject)
-                            dismiss()
-                        } label: {
-                            HStack(spacing: 12) {
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(subject.name)
-                                        .font(.system(size: 15, weight: .semibold, design: .rounded))
-                                        .foregroundStyle(.white)
-                                    Text("Target \(Int(subject.requiredPercentage))%")
-                                        .font(.system(size: 12, weight: .medium, design: .rounded))
-                                        .foregroundStyle(.white.opacity(0.6))
-                                }
+                        VStack(alignment: .leading, spacing: 10) {
+                            Button {
+                                subjectStore.selectSubject(subject)
+                                dismiss()
+                            } label: {
+                                HStack(spacing: 12) {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(subject.name)
+                                            .font(.system(size: 15, weight: .semibold, design: .rounded))
+                                            .foregroundStyle(.white)
+                                        Text("Target \(Int(subject.requiredPercentage))%")
+                                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                                            .foregroundStyle(.white.opacity(0.6))
+                                    }
 
-                                Spacer()
+                                    Spacer()
 
-                                Text("\(Int(subject.currentPercentage.rounded()))%")
-                                    .font(.system(size: 14, weight: .bold, design: .rounded))
-                                    .foregroundStyle(subject.status == .safe ? Color.green : Color.red)
+                                    Text("\(Int(subject.currentPercentage.rounded()))%")
+                                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                                        .foregroundStyle(subject.hasAttendance
+                                                         ? (subject.isAtRisk ? BrandColor.colorMissed : BrandColor.colorAttend)
+                                                         : .white.opacity(0.55))
 
-                                if subject.id == subjectStore.selectedSubjectID {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(Color.green)
+                                    if subject.id == subjectStore.selectedSubjectID {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(BrandColor.colorAttend)
+                                    }
                                 }
                             }
-                            .padding(.vertical, 4)
+                            .buttonStyle(.plain)
+
+                            HStack(spacing: 8) {
+                                Button {
+                                    AnalyticsService.shared.log(.timetableEditorOpened)
+                                    classDaysSubjectID = subject.id
+                                } label: {
+                                    Label(
+                                        subject.weeklySchedule.totalPerWeek > 0 ? "Days" : "Set days",
+                                        systemImage: "calendar"
+                                    )
+                                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                                    .foregroundStyle(BrandColor.colorOnAccent)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 8)
+                                    .background(
+                                        Capsule(style: .continuous)
+                                            .fill(BrandColor.colorAccentPrimary)
+                                    )
+                                }
+                                .buttonStyle(.plain)
+
+                                Button {
+                                    renamingSubjectID = subject.id
+                                    renameSubjectName = subject.name
+                                    isShowingRenamePrompt = true
+                                } label: {
+                                    Label("Rename", systemImage: "pencil")
+                                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                                        .foregroundStyle(.white)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 8)
+                                        .background(
+                                            Capsule(style: .continuous)
+                                                .fill(Color.white.opacity(0.12))
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                            }
                         }
+                        .padding(.vertical, 4)
                         .listRowBackground(Color.white.opacity(0.04))
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                            Button("Timetable") {
-                                editingTimetableSubjectID = subject.id
-                            }
-                            .tint(.purple)
-
-                            Button("Rename") {
-                                renamingSubjectID = subject.id
-                                renameSubjectName = subject.name
-                                isShowingRenamePrompt = true
-                            }
-                            .tint(.blue)
-
                             Button(role: .destructive) {
                                 subjectStore.deleteSubject(id: subject.id)
                             } label: {
@@ -4473,11 +4386,15 @@ private struct SubjectListView: View {
                         }
                     }
                     .onDelete(perform: subjectStore.deleteSubjects)
+                } header: {
+                    Text("Subjects")
+                } footer: {
+                    Text("Set class days so Today only asks you to mark lectures you actually have.")
                 }
 
             }
             .scrollContentBackground(.hidden)
-            .background(Color(red: 0.05, green: 0.06, blue: 0.1))
+            .background(BrandColor.colorBackground)
             .navigationTitle("Subjects")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -4500,16 +4417,20 @@ private struct SubjectListView: View {
                 TextField("e.g. Math", text: $newSubjectName)
                 Button("Cancel", role: .cancel) {}
                 Button("Add") {
-                    if subjectStore.addSubject(named: newSubjectName) == false {
+                    let name = newSubjectName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard name.isEmpty == false else { return }
+                    if subjectStore.addSubject(named: name) == false {
                         if SoftPaywallCoordinator.shared.consumeSubjectLimitTrigger() {
                             isShowingProPaywall = true
                         } else {
                             isShowingSubjectLimitAlert = true
                         }
+                    } else {
+                        classDaysSubjectID = subjectStore.selectedSubjectID
                     }
                 }
             } message: {
-                Text("Type a subject name or leave blank to auto-name.")
+                Text("Name the paper — Maths, DSA, History.")
             }
             .alert("Rename Subject", isPresented: $isShowingRenamePrompt) {
                 TextField("Subject name", text: $renameSubjectName)
@@ -4548,28 +4469,28 @@ private struct SubjectListView: View {
             }
             .sheet(
                 isPresented: Binding(
-                    get: { editingTimetableSubjectID != nil },
+                    get: { classDaysSubjectID != nil },
                     set: { isPresented in
                         if isPresented == false {
-                            editingTimetableSubjectID = nil
+                            classDaysSubjectID = nil
                         }
                     }
                 )
             ) {
-                if let subjectID = editingTimetableSubjectID {
-                    TimetableEditorSheet(
+                if let subjectID = classDaysSubjectID {
+                    ClassDaysSheet(
                         subjectStore: subjectStore,
                         subjectID: subjectID
                     )
-                    .preferredColorScheme(.dark)
-                    .analyticsScreen(.timetableEditor)
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
                 }
             }
         }
     }
 }
 
-private struct TimetableEditorSheet: View {
+struct TimetableEditorSheet: View {
     @ObservedObject var subjectStore: SubjectStore
     let subjectID: UUID
     @Environment(\.dismiss) private var dismiss

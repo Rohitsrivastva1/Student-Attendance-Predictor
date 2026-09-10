@@ -16,9 +16,9 @@ struct FocusTimerView: View {
     @State private var newTopicName = ""
     @State private var topicStatsScope: FocusTopicStatsScope = .week
 
-    private let cyan = Color(red: 0.32, green: 0.84, blue: 1.0)
-    private let green = Color(red: 0.2, green: 0.9, blue: 0.5)
-    private let gold = Color(red: 1.0, green: 0.78, blue: 0.28)
+    private let cyan = BrandColor.colorAccentPrimary
+    private let green = BrandColor.colorAttend
+    private let gold = BrandColor.colorPremium
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {

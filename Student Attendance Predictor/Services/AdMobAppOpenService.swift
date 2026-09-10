@@ -82,6 +82,10 @@ final class AdMobAppOpenService: NSObject {
 
     /// Call when the scene becomes active (mirrors `applicationDidBecomeActive`).
     func showAdIfAvailable() {
+        if shouldDeferForNewHabit() {
+            logSkip("habit_grace")
+            return
+        }
         pendingShowTask?.cancel()
         pendingShowTask = Task { @MainActor in
             // Debounce competing triggers (scenePhase + SDK ready) and let UI settle.
@@ -224,6 +228,14 @@ final class AdMobAppOpenService: NSObject {
         AnalyticsService.shared.recordAdImpression("app_open")
     }
     #endif
+
+    /// Don’t cover the first-session habit with a full-screen ad.
+    private func shouldDeferForNewHabit() -> Bool {
+        if AnalyticsService.shared.hasMarkedAtLeastOnce == false {
+            return true
+        }
+        return AnalyticsService.shared.daysSinceInstall < 3
+    }
 
     private func shouldShow(forOpenNumber openNumber: Int) -> Bool {
         guard openNumber > 0 else { return false }

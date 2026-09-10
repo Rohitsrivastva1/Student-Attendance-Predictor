@@ -9,6 +9,7 @@ import SwiftUI
 
 #if DEBUG
 struct DebugToolsView: View {
+    @ObservedObject var subjectStore: SubjectStore
     @ObservedObject private var entitlements = AdEntitlementsStore.shared
     @Environment(\.dismiss) private var dismiss
 
@@ -17,6 +18,18 @@ struct DebugToolsView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    Button("Fill 30-day screenshot data") {
+                        subjectStore.fillScreenshotDemoMonth()
+                        showReset("Loaded Data Structures, Mathematics, Physics with ~30 days. Close Settings, then screenshot Today, Plan, Log, and Subjects.")
+                    }
+                    Text("Replaces current papers. Saturday is a class day so Today looks filled. Review prompt is snoozed for a week so it won’t cover shots.")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(.secondary)
+                } header: {
+                    Text("Screenshots")
+                }
+
                 Section {
                     Toggle(isOn: proBinding) {
                         Label("Premium (Pro)", systemImage: "crown.fill")

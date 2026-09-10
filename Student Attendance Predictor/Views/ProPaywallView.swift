@@ -39,20 +39,18 @@ struct ProPaywallView: View {
 
     private var isRestoreFailure: Bool { lastFailureWasRestore }
 
-    private let cyan = Color(red: 0.32, green: 0.84, blue: 1.0)
-    private let gold = Color(red: 1.0, green: 0.78, blue: 0.28)
-    private let warmGlow = Color(red: 1.0, green: 0.62, blue: 0.22)
+    private let cyan = BrandColor.colorAccentPrimary
+    private let gold = BrandColor.colorPremium
+    private let warmGlow = BrandColor.colorPremiumDeep
 
     private var features: [(icon: String, title: String, subtitle: String)] {
         let skipVerb = StudentMarketStore.current.skipVerb
         let skip = ("calendar.badge.checkmark", "See the safe day before you \(skipVerb)", "We already did the math. Pro shows which lecture you can miss.")
         let forecast = ("chart.line.uptrend.xyaxis", "Know where you'll land", "Subject-wise forecast before the semester ends — not after detention.")
-        let subjects = ("books.vertical.fill", "Every \(StudentMarketStore.current.courseNoun), not just 3", "Free stops at \(ProPurchaseConfiguration.freeSubjectLimit). Real timetables need Pro.")
+        let subjects = ("books.vertical.fill", "Every \(StudentMarketStore.current.courseNoun), not just 3", "Free includes \(ProPurchaseConfiguration.freeSubjectLimit). Add the rest of your semester with Pro.")
         switch source {
         case "subject_limit":
             return [subjects, skip, forecast]
-        case "at_risk_week", "at_risk_home", "at_risk_week_3":
-            return [forecast, skip, subjects]
         default:
             return [skip, forecast, subjects]
         }
@@ -147,9 +145,9 @@ struct ProPaywallView: View {
         ZStack {
             LinearGradient(
                 colors: [
-                    Color(red: 0.04, green: 0.05, blue: 0.09),
-                    Color(red: 0.06, green: 0.07, blue: 0.13),
-                    Color(red: 0.05, green: 0.08, blue: 0.10)
+                    BrandColor.colorBackground,
+                    Color(hex: 0x10141C),
+                    BrandColor.colorBackground
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
@@ -157,14 +155,14 @@ struct ProPaywallView: View {
             .ignoresSafeArea()
 
             Circle()
-                .fill(gold.opacity(orbPulse ? 0.22 : 0.10))
+                .fill(gold.opacity(orbPulse ? 0.12 : 0.06))
                 .frame(width: 280, height: 280)
                 .blur(radius: 70)
                 .offset(x: -90, y: -220)
                 .allowsHitTesting(false)
 
             Circle()
-                .fill(cyan.opacity(orbPulse ? 0.20 : 0.08))
+                .fill(cyan.opacity(orbPulse ? 0.10 : 0.05))
                 .frame(width: 320, height: 320)
                 .blur(radius: 80)
                 .offset(x: 120, y: 260)
@@ -256,16 +254,7 @@ struct ProPaywallView: View {
                     .scaleEffect(orbPulse ? 1.08 : 0.92)
 
                 RoundedRectangle(cornerRadius: 28, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color(red: 1.0, green: 0.86, blue: 0.42),
-                                Color(red: 0.95, green: 0.58, blue: 0.18)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
+                    .fill(BrandColor.premiumGradient)
                     .frame(width: 84, height: 84)
                     .overlay(
                         RoundedRectangle(cornerRadius: 28, style: .continuous)
@@ -452,18 +441,8 @@ struct ProPaywallView: View {
                 .padding(.vertical, 16)
                 .background(
                     Capsule(style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color(red: 1.0, green: 0.88, blue: 0.48),
-                                    Color(red: 1.0, green: 0.70, blue: 0.28),
-                                    Color(red: 0.98, green: 0.52, blue: 0.18)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .shadow(color: gold.opacity(0.45), radius: 18, x: 0, y: 8)
+                        .fill(BrandColor.premiumGradient)
+                        .shadow(color: BrandColor.colorElevation, radius: 12, y: 6)
                 )
             }
             .buttonStyle(ProPressableStyle())
@@ -589,10 +568,8 @@ struct ProPaywallView: View {
         switch source {
         case "forecast", "locked_forecast", "skip_planner":
             return market == .india ? "Don't bunk the wrong day" : "Don't skip the wrong day"
-        case "at_risk_week", "at_risk_home", "at_risk_week_3":
-            return market == .india ? "Don't get detained" : "Don't drop below target"
         case "subject_limit":
-            return "Your real timetable is locked"
+            return "Your other papers are waiting"
         case "pdf_export", "csv_export":
             return "Show them the proof"
         case "focus_custom":
@@ -611,10 +588,8 @@ struct ProPaywallView: View {
         switch source {
         case "forecast", "locked_forecast", "skip_planner":
             return "Guessing a \(skip) is how the 75% line gets crossed. Pro shows the day before you walk out."
-        case "at_risk_week", "at_risk_home", "at_risk_week_3":
-            return "One more miss can cost the semester. See the exact recovery path — then decide."
         case "subject_limit":
-            return "Free stops at \(ProPurchaseConfiguration.freeSubjectLimit) \(StudentMarketStore.current.courseNounPlural). Unlock the rest of your week."
+            return "Free includes \(ProPurchaseConfiguration.freeSubjectLimit) \(StudentMarketStore.current.courseNounPlural). Unlock the rest so every lecture is tracked."
         case "pdf_export":
             return "Parent-ready PDF with attendance + grades. One tap to share."
         case "csv_export":
@@ -663,8 +638,6 @@ struct ProPaywallView: View {
             switch source {
             case "skip_planner", "forecast", "locked_forecast":
                 return "Reveal my safe days\(suffix)"
-            case "at_risk_week", "at_risk_home", "at_risk_week_3":
-                return "See my recovery path\(suffix)"
             case "subject_limit":
                 return "Unlock all subjects\(suffix)"
             default:

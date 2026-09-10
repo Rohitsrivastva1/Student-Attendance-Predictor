@@ -27,12 +27,12 @@ struct PeriodChipGrid: View {
                 } label: {
                     Text(period.chipLabel)
                         .font(.system(size: 14, weight: .bold, design: .rounded))
-                        .foregroundStyle(isOn ? Color(red: 0.05, green: 0.06, blue: 0.1) : Color.white.opacity(0.85))
+                        .foregroundStyle(isOn ? BrandColor.colorOnAccent : Color.white.opacity(0.85))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
                         .background(
                             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(isOn ? Color(red: 0.32, green: 0.84, blue: 1.0) : Color.white.opacity(0.08))
+                                .fill(isOn ? BrandColor.colorAccentPrimary : Color.white.opacity(0.08))
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: 10, style: .continuous)

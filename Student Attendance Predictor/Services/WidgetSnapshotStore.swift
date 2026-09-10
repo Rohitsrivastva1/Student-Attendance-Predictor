@@ -55,10 +55,10 @@ enum WidgetSnapshotStore {
         }
         publish(
             percentage: selected.currentPercentage,
-            bunksLeft: selected.status == .safe ? selected.bunkAllowed : 0,
+            bunksLeft: selected.isAtRisk ? 0 : selected.bunkAllowed,
             subjectName: selected.name,
-            isSafe: selected.status == .safe,
-            hasData: true
+            isSafe: selected.hasAttendance && selected.status == .safe,
+            hasData: selected.hasAttendance
         )
     }
 

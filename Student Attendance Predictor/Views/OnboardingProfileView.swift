@@ -27,8 +27,8 @@ struct OnboardingProfileView: View {
         case name, classOrDegree, institution
     }
 
-    private let cyan = Color(red: 0.32, green: 0.84, blue: 1.0)
-    private let mint = Color(red: 0.2, green: 0.9, blue: 0.5)
+    private let cyan = BrandColor.colorAccentPrimary
+    private let mint = BrandColor.colorAccentPrimary
     private let ages = Array(15...30)
 
     private var trimmedName: String {

@@ -23,6 +23,9 @@ enum AppScreen: String, CaseIterable {
     case exportReportsTool = "export_reports_tool"
     case settings
     case subjects
+    case firstRunSetup = "first_run_setup"
+    case onboardingProfile = "onboarding_profile"
+    case classDays = "class_days"
     case timetableEditor = "timetable_editor"
     case dayEditor = "day_editor"
     case privacyPolicy = "privacy_policy"

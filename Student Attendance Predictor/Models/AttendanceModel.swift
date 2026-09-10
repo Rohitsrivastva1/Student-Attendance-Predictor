@@ -193,6 +193,14 @@ struct SubjectSummary: Identifiable, Equatable {
         CalculationService.currentPercentage(attended: attendedClasses, total: totalClasses)
     }
 
+    /// False until the first Attend / Missed. 0% vs 75% is not “at risk.”
+    var hasAttendance: Bool { totalClasses > 0 }
+
+    /// Enough history that “if you miss → 50%” or “no buffer” isn’t just 1-of-1 math.
+    var hasStableSample: Bool { totalClasses >= 5 }
+
+    var isAtRisk: Bool { hasAttendance && status == .risk }
+
     var status: AttendanceStatus {
         currentPercentage >= requiredPercentage ? .safe : .risk
     }

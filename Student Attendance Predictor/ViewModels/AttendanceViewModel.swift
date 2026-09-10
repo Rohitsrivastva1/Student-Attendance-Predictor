@@ -47,8 +47,7 @@ final class AttendanceViewModel: ObservableObject {
     private enum Keys {
         static let defaultRequiredPercentage = "attendance.defaultRequiredPercentage"
         static let safeCalculationCount = "attendance.safeCalculationCount"
-        static let didPromptForReview = "attendance.didPromptForReview"
-        /// Cold/warm process launches — review waits until the 3rd+ session.
+        /// Cold/warm process launches — native review waits until the 2nd+ session.
         static let sessionCount = "app.sessionCount"
     }
 
@@ -277,9 +276,7 @@ final class AttendanceViewModel: ObservableObject {
     private func trackReviewTriggerIfNeeded(input: AttendanceInput, result: AttendanceResult) {
         guard suppressReviewTracking == false else { return }
         guard result.status == .safe else { return }
-        guard defaults.bool(forKey: Keys.didPromptForReview) == false else { return }
-        // Apple limits review prompts; wait until the user has opened the app a few times.
-        guard defaults.integer(forKey: Keys.sessionCount) >= 3 else { return }
+        guard AppStoreReviewPromptCoordinator.shared.canRequestNativeReview else { return }
 
         let signature = "\(input.totalClasses)|\(input.attendedClasses)|\(Self.formattedPercentageString(for: input.requiredPercentage))"
         guard signature != lastSafeCountSignature else { return }
@@ -288,8 +285,7 @@ final class AttendanceViewModel: ObservableObject {
         let nextCount = defaults.integer(forKey: Keys.safeCalculationCount) + 1
         defaults.set(nextCount, forKey: Keys.safeCalculationCount)
 
-        // First Safe result on/after session 3 triggers the system review prompt once.
-        defaults.set(true, forKey: Keys.didPromptForReview)
+        AppStoreReviewPromptCoordinator.shared.markNativeReviewRequested()
         reviewRequestToken += 1
     }
 
@@ -347,10 +343,13 @@ final class SubjectStore: ObservableObject {
 
     var dashboardSummary: FacultyDashboardSummary {
         let total = subjects.count
-        let safeCount = subjects.filter { $0.status == .safe }.count
-        let riskCount = max(0, total - safeCount)
-        let average = total == 0 ? 0 : subjects.map(\.currentPercentage).reduce(0, +) / Double(total)
-        let mostAtRisk = subjects.min {
+        let started = subjects.filter(\.hasAttendance)
+        let safeCount = started.filter { $0.status == .safe }.count
+        let riskCount = started.filter(\.isAtRisk).count
+        let average = started.isEmpty
+            ? 0
+            : started.map(\.currentPercentage).reduce(0, +) / Double(started.count)
+        let mostAtRisk = started.filter(\.isAtRisk).min {
             ($0.currentPercentage - $0.requiredPercentage) < ($1.currentPercentage - $1.requiredPercentage)
         }
 
@@ -480,7 +479,7 @@ final class SubjectStore: ObservableObject {
 
         reloadSubjects()
         migrateLegacyUserDefaultsIfNeeded()
-        ensureAtLeastOneSubject()
+        removeUnusedPlaceholderSubjectsIfNeeded()
         reloadSubjects()
 
         let storedSelectedID = defaults.string(forKey: Keys.selectedSubjectID).flatMap(UUID.init(uuidString:))
@@ -498,7 +497,9 @@ final class SubjectStore: ObservableObject {
         applyMarketDefaultAttendanceIfNeeded()
         SemesterSettings.ensureDefaultDatesIfNeeded()
         Task(priority: .utility) { @MainActor in
-            NotificationService.requestAuthorizationIfNeeded()
+            if subjects.isEmpty == false {
+                NotificationService.requestAuthorizationIfNeeded()
+            }
             NotificationService.registerPersonalityCategory()
             NotificationService.scheduleDayTwoMarkNudgeIfNeeded()
             publishWidgetSnapshot()
@@ -532,17 +533,20 @@ final class SubjectStore: ObservableObject {
         calculator.applyDefaultRequiredPercentage(target)
     }
 
-    /// Adds a subject when allowed. Returns `false` if Free subject cap blocks the add (Pro bypasses).
+    /// Adds a subject when allowed. Requires a real name — we never auto-create "Subject 1".
     @discardableResult
     func addSubject(named customName: String? = nil) -> Bool {
         guard AdEntitlementsStore.shared.canAddSubject(currentCount: subjects.count) else {
             AnalyticsService.shared.log(.subjectLimitHit(totalSubjects: subjects.count))
             return false
         }
+        guard let name = validatedSubjectName(customName) else {
+            return false
+        }
 
         let entity = SubjectEntity(context: context)
         entity.id = UUID()
-        entity.name = validatedSubjectName(customName) ?? nextSubjectName()
+        entity.name = name
         entity.totalClasses = 0
         entity.attendedClasses = 0
         entity.requiredPercentage = calculator.defaultRequiredPercentage
@@ -561,7 +565,6 @@ final class SubjectStore: ObservableObject {
     }
 
     func deleteSubjects(at offsets: IndexSet) {
-        guard subjects.count > 1 else { return }
         let idsToDelete = offsets.map { subjects[$0].id }
 
         let request = SubjectEntity.fetchRequest()
@@ -582,8 +585,6 @@ final class SubjectStore: ObservableObject {
     }
 
     func deleteSubject(id: UUID) {
-        guard subjects.count > 1 else { return }
-
         let request = SubjectEntity.fetchRequest()
         request.fetchLimit = 1
         request.predicate = NSPredicate(format: "id == %@", id as CVarArg)
@@ -658,6 +659,7 @@ final class SubjectStore: ObservableObject {
         reloadSubjects()
         AnalyticsService.shared.log(.timetableUpdated(classesPerWeek: schedule.totalPerWeek))
         AnalyticsUserProfile.sync(subjectStore: self)
+        publishWidgetSnapshot()
     }
 
     func applyWeeklySchedule(for subjectID: UUID, addToExisting: Bool) {
@@ -770,17 +772,20 @@ final class SubjectStore: ObservableObject {
         return subject.weeklySchedule.classes(on: date)
     }
 
-    /// Subjects with timetable classes on `date`. Falls back to all subjects when none are scheduled.
+    /// Subjects with timetable classes on `date`. Subjects with no days set still
+    /// appear (so students can mark while they finish setup). If every subject has
+    /// days and none fall on `date`, the list is empty — a real off day.
     func subjectsForMarkToday(on date: Date = Date()) -> [SubjectSummary] {
-        let scheduled = subjects.filter { classesScheduledToday(for: $0.id, on: date) > 0 }
-        if scheduled.isEmpty == false {
-            return scheduled.sorted {
-                $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-            }
-        }
-        return subjects.sorted {
+        let namedSort: (SubjectSummary, SubjectSummary) -> Bool = {
             $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
         }
+        let withDays = subjects.filter { $0.weeklySchedule.totalPerWeek > 0 }
+        let withoutDays = subjects.filter { $0.weeklySchedule.totalPerWeek == 0 }
+        guard withDays.isEmpty == false else {
+            return subjects.sorted(by: namedSort)
+        }
+        let scheduledToday = withDays.filter { classesScheduledToday(for: $0.id, on: date) > 0 }
+        return (scheduledToday + withoutDays).sorted(by: namedSort)
     }
 
     /// Classes left this semester for a subject (timetable × weeks − holidays − planned bunks).
@@ -989,6 +994,10 @@ final class SubjectStore: ObservableObject {
         AnalyticsUserProfile.recordDayMarked(source: source)
         AnalyticsUserProfile.sync(subjectStore: self)
 
+        if isHoliday == false, boundedAttended > 0 {
+            AppStoreReviewPromptCoordinator.shared.notePositiveMoment()
+        }
+
         SoftPaywallCoordinator.shared.recordAtRiskWeekIfNeeded(
             isAtRisk: dashboardSummary.riskSubjects > 0
         )
@@ -1194,19 +1203,30 @@ final class SubjectStore: ObservableObject {
         )
     }
 
-    private func ensureAtLeastOneSubject() {
-        guard subjects.isEmpty else { return }
+    /// Old builds auto-created "Subject 1" on launch. Drop unused ones so first-run can start.
+    private func removeUnusedPlaceholderSubjectsIfNeeded() {
+        let unused = subjects.filter { subject in
+            subject.totalClasses == 0
+                && subject.weeklySchedule.totalPerWeek == 0
+                && Self.isPlaceholderName(subject.name)
+        }
+        guard unused.isEmpty == false else { return }
+        guard unused.count == subjects.count else { return }
 
-        let entity = SubjectEntity(context: context)
-        entity.id = UUID()
-        entity.name = "Subject 1"
-        entity.totalClasses = 0
-        entity.attendedClasses = 0
-        entity.requiredPercentage = calculator.defaultRequiredPercentage
-        entity.scheduleData = Self.encodeSchedule(.empty)
-        entity.createdAt = Date()
-        entity.updatedAt = Date()
-        saveContext()
+        let ids = unused.map(\.id) as [UUID]
+        let request = SubjectEntity.fetchRequest()
+        request.predicate = NSPredicate(format: "id IN %@", ids)
+        if let entities = try? context.fetch(request) {
+            entities.forEach(context.delete)
+            saveContext()
+        }
+    }
+
+    private static func isPlaceholderName(_ name: String) -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("Subject ") else { return false }
+        let suffix = trimmed.dropFirst("Subject ".count)
+        return suffix.isEmpty == false && suffix.allSatisfy(\.isNumber)
     }
 
     private func migrateLegacyUserDefaultsIfNeeded() {
@@ -1235,15 +1255,6 @@ final class SubjectStore: ObservableObject {
         }
 
         defaults.set(true, forKey: Keys.didMigrateToCoreData)
-    }
-
-    private func nextSubjectName() -> String {
-        let existingNames = Set(subjects.map(\.name))
-        var index = subjects.count + 1
-        while existingNames.contains("Subject \(index)") {
-            index += 1
-        }
-        return "Subject \(index)"
     }
 
     private func validatedSubjectName(_ raw: String?) -> String? {
@@ -1323,6 +1334,156 @@ final class SubjectStore: ObservableObject {
     private func persistSelectedSubjectID() {
         defaults.set(selectedSubjectID?.uuidString, forKey: Keys.selectedSubjectID)
     }
+
+    #if DEBUG
+    /// Replaces current papers with 3 named subjects and ~30 days of marks for App Store shots.
+    func fillScreenshotDemoMonth() {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        guard let monthStart = calendar.date(byAdding: .day, value: -29, to: today) else { return }
+
+        if let records = try? context.fetch(AttendanceRecordEntity.fetchRequest()) {
+            records.forEach(context.delete)
+        }
+        if let existing = try? context.fetch(SubjectEntity.fetchRequest()) {
+            existing.forEach(context.delete)
+        }
+        saveContext()
+
+        struct Paper {
+            let name: String
+            let schedule: WeeklySchedule
+            let missEvery: Int
+        }
+
+        let papers: [Paper] = [
+            Paper(
+                name: "Data Structures",
+                schedule: screenshotSchedule(
+                    monday: [9, 10], wednesday: [9], friday: [10], saturday: [9]
+                ),
+                missEvery: 11
+            ),
+            Paper(
+                name: "Mathematics",
+                schedule: screenshotSchedule(
+                    tuesday: [11], thursday: [11, 12], saturday: [11]
+                ),
+                missEvery: 7
+            ),
+            Paper(
+                name: "Physics",
+                schedule: screenshotSchedule(
+                    monday: [14], tuesday: [14], thursday: [14], saturday: [14]
+                ),
+                missEvery: 9
+            )
+        ]
+
+        var firstID: UUID?
+        let createdAt = calendar.date(byAdding: .day, value: -36, to: today) ?? today
+
+        for paper in papers {
+            let entity = SubjectEntity(context: context)
+            let id = UUID()
+            if firstID == nil { firstID = id }
+            entity.id = id
+            entity.name = paper.name
+            entity.requiredPercentage = 75
+            entity.scheduleData = Self.encodeSchedule(paper.schedule)
+            entity.createdAt = createdAt
+            entity.updatedAt = Date()
+
+            var attended = 0
+            var total = 0
+            var trend: [AttendanceTrendPoint] = []
+            var day = monthStart
+
+            while day <= today {
+                let scheduled = paper.schedule.classes(on: day)
+                if scheduled > 0 {
+                    let daysFromToday = calendar.dateComponents([.day], from: day, to: today).day ?? 0
+                    let dayNumber = calendar.ordinality(of: .day, in: .year, for: day) ?? 0
+                    let isHoliday = daysFromToday == 16
+                    let isRecent = daysFromToday <= 8
+                    let isMiss = isHoliday == false
+                        && isRecent == false
+                        && dayNumber % paper.missEvery == 0
+
+                    let record = AttendanceRecordEntity(context: context)
+                    record.id = UUID()
+                    record.subjectID = id
+                    record.date = day
+                    record.isHoliday = isHoliday
+                    record.updatedAt = day
+                    if isHoliday {
+                        record.scheduledClasses = 0
+                        record.attendedClasses = 0
+                    } else {
+                        record.scheduledClasses = Int32(scheduled)
+                        record.attendedClasses = Int32(isMiss ? 0 : scheduled)
+                        total += scheduled
+                        if isMiss == false { attended += scheduled }
+                    }
+
+                    let pct = CalculationService.currentPercentage(attended: attended, total: total)
+                    if total > 0, trend.count < 20, dayNumber % 2 == 0 || day == today {
+                        trend.append(AttendanceTrendPoint(timestamp: day, percentage: pct))
+                    }
+                }
+                guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
+                day = next
+            }
+
+            entity.totalClasses = Int32(total)
+            entity.attendedClasses = Int32(attended)
+            AttendanceTrendStore.replace(subjectID: id, points: trend)
+        }
+
+        saveContext()
+        reloadSubjects()
+        selectedSubjectID = firstID ?? subjects.first?.id
+        loadSelectedSubjectIntoCalculator()
+        publishWidgetSnapshot()
+
+        UserDefaults.standard.set(true, forKey: "onboarding.didComplete")
+        UserDefaults.standard.set(true, forKey: "analytics.didLogFirstMark")
+        UserDefaults.standard.set(Date().addingTimeInterval(7 * 24 * 60 * 60), forKey: "review.v2.snoozeUntil")
+        UserDefaults.standard.set(Date(), forKey: "paywall.lastShownAt")
+        GuidedSetupStore.shared.markCompleteSilently()
+
+        if StudentProfileStore.shared.profile.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            StudentProfileStore.shared.save(
+                StudentProfile(
+                    name: "Aarav",
+                    age: 19,
+                    classOrDegree: "UG 2nd year",
+                    institutionName: "NIT"
+                ),
+                skipped: false
+            )
+        }
+    }
+
+    private func screenshotSchedule(
+        monday: [Int] = [],
+        tuesday: [Int] = [],
+        wednesday: [Int] = [],
+        thursday: [Int] = [],
+        friday: [Int] = [],
+        saturday: [Int] = []
+    ) -> WeeklySchedule {
+        var schedule = WeeklySchedule.empty
+        schedule.mondayHours = monday
+        schedule.tuesdayHours = tuesday
+        schedule.wednesdayHours = wednesday
+        schedule.thursdayHours = thursday
+        schedule.fridayHours = friday
+        schedule.saturdayHours = saturday
+        schedule.syncCountsFromHours()
+        return schedule
+    }
+    #endif
 
     private func saveContext() {
         guard context.hasChanges else { return }

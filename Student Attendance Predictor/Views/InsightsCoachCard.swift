@@ -10,11 +10,14 @@ import SwiftUI
 struct InsightsCoachCard: View {
     let advice: InsightsAdvice
     let subjects: [SubjectSummary]
+    var isPro: Bool = true
     var onSelectSubject: (UUID) -> Void
+    var onEmptyAction: (() -> Void)? = nil
+    var onLockedRecover: (() -> Void)? = nil
 
-    private let cyan = Color(red: 0.32, green: 0.84, blue: 1.0)
-    private let green = Color(red: 0.2, green: 0.9, blue: 0.5)
-    private let danger = Color(red: 1.0, green: 0.45, blue: 0.4)
+    private let cyan = BrandColor.colorAccentPrimary
+    private let green = BrandColor.colorAttend
+    private let danger = BrandColor.colorMissed
 
     private var accent: Color {
         switch advice.kind {
@@ -31,8 +34,12 @@ struct InsightsCoachCard: View {
                 .foregroundStyle(.white.opacity(0.4))
                 .tracking(1.1)
 
+            if advice.kind == .empty {
+                BrandHeroImage(illustration: .emptyInsights, size: 140)
+                    .frame(maxWidth: .infinity)
+            }
             Text(advice.title)
-                .font(.system(size: 22, weight: .black, design: .rounded))
+                .font(BrandType.display(24))
                 .foregroundStyle(.white)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -41,16 +48,26 @@ struct InsightsCoachCard: View {
                 .foregroundStyle(.white.opacity(0.65))
                 .fixedSize(horizontal: false, vertical: true)
 
-            let rows = InsightsCoach.rankedSubjects(subjects)
-            if rows.isEmpty == false {
+            if advice.kind == .empty, let onEmptyAction {
+                Button(action: onEmptyAction) {
+                    Text("Add a subject")
+                        .font(.system(size: 16, weight: .heavy, design: .rounded))
+                        .foregroundStyle(.black)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(cyan)
+                        )
+                }
+                .buttonStyle(PressableButtonStyle())
+            }
+
+            let rankedRows = InsightsCoach.rankedSubjects(subjects)
+            if rankedRows.isEmpty == false {
                 VStack(spacing: 8) {
-                    ForEach(rows) { subject in
-                        Button {
-                            onSelectSubject(subject.id)
-                        } label: {
-                            subjectRow(subject)
-                        }
-                        .buttonStyle(.plain)
+                    ForEach(rankedRows) { subject in
+                        subjectRow(subject)
                     }
                 }
             }
@@ -65,32 +82,77 @@ struct InsightsCoachCard: View {
                         .stroke(accent.opacity(0.35), lineWidth: 1)
                 )
         )
+        .onAppear {
+            if isPro == false, subjects.contains(where: \.isAtRisk) {
+                AnalyticsService.shared.logProCtaShownOnce(surface: "plan_recover")
+            }
+        }
     }
 
     private func subjectRow(_ subject: SubjectSummary) -> some View {
-        let isRisk = subject.status == .risk
+        let isRisk = subject.isAtRisk
         return HStack(spacing: 10) {
-            Circle()
-                .fill(isRisk ? danger : green)
-                .frame(width: 8, height: 8)
-            Text(subject.name)
-                .font(.system(size: 14, weight: .bold, design: .rounded))
-                .foregroundStyle(.white)
-                .lineLimit(1)
-            Spacer(minLength: 8)
-            Text("\(Int(subject.currentPercentage.rounded()))%")
-                .font(.system(size: 14, weight: .heavy, design: .rounded))
-                .foregroundStyle(isRisk ? danger : .white.opacity(0.85))
-            Text(subject.actionChipLabel)
-                .font(.system(size: 11, weight: .bold, design: .rounded))
-                .foregroundStyle(isRisk ? danger : green)
+            Button {
+                onSelectSubject(subject.id)
+            } label: {
+                HStack(spacing: 10) {
+                    Circle()
+                        .fill(isRisk ? danger : green)
+                        .frame(width: 8, height: 8)
+                    Text(subject.name)
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    Text("\(Int(subject.currentPercentage.rounded()))%")
+                        .font(.system(size: 14, weight: .heavy, design: .rounded))
+                        .foregroundStyle(isRisk ? danger : green)
+                }
+            }
+            .buttonStyle(.plain)
+
+            if isRisk {
+                recoverChip(for: subject)
+            } else {
+                Text(subject.actionChipLabel)
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(green)
+            }
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 10)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(isRisk ? danger.opacity(0.10) : Color.white.opacity(0.04))
+                .fill(isRisk ? danger.opacity(0.16) : Color.white.opacity(0.04))
         )
+    }
+
+    private func recoverChip(for subject: SubjectSummary) -> some View {
+        Button {
+            if isPro {
+                onSelectSubject(subject.id)
+            } else {
+                onLockedRecover?()
+            }
+        } label: {
+            HStack(spacing: 4) {
+                if isPro == false {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 9, weight: .bold))
+                }
+                Text("Recover")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+            }
+            .foregroundStyle(danger.opacity(0.95))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(0.08))
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isPro ? "Recover \(subject.name)" : "Recover \(subject.name), Pro")
     }
 }
 
@@ -112,7 +174,7 @@ struct InsightsWeekPulseCard: View {
                     Button(action: onShareStreak) {
                         Label("\(streak)d", systemImage: "flame.fill")
                             .font(.system(size: 12, weight: .bold, design: .rounded))
-                            .foregroundStyle(Color(red: 1.0, green: 0.78, blue: 0.28))
+                            .foregroundStyle(BrandColor.colorPremium)
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Share \(streak)-day streak")
@@ -122,7 +184,11 @@ struct InsightsWeekPulseCard: View {
             HStack(spacing: 10) {
                 pulseStat(title: "Attended", value: "\(attended)")
                 pulseStat(title: skipNounPlural, value: "\(missed)")
-                pulseStat(title: "Streak", value: streak == 0 ? "—" : "\(streak)d")
+                pulseStat(
+                    title: "Streak",
+                    value: streak == 0 ? "0 days" : "\(streak)d",
+                    muted: streak == 0
+                )
             }
         }
         .padding(16)
@@ -137,14 +203,14 @@ struct InsightsWeekPulseCard: View {
         )
     }
 
-    private func pulseStat(title: String, value: String) -> some View {
+    private func pulseStat(title: String, value: String, muted: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
                 .font(.system(size: 11, weight: .bold, design: .rounded))
                 .foregroundStyle(.white.opacity(0.45))
             Text(value)
                 .font(.system(size: 18, weight: .heavy, design: .rounded))
-                .foregroundStyle(.white)
+                .foregroundStyle(muted ? .white.opacity(0.38) : .white)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)

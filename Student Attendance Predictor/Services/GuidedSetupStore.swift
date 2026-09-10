@@ -2,7 +2,7 @@
 //  GuidedSetupStore.swift
 //  Student Attendance Predictor
 //
-//  First-run coach marks: add a subject → Mark Today.
+//  First-run coach marks: add a subject → set class days → Mark Today.
 //
 
 import Foundation
@@ -10,6 +10,7 @@ import Combine
 
 enum GuidedSetupStep: String, Equatable {
     case addSubject
+    case setClassDays
     case markToday
 }
 
@@ -36,7 +37,7 @@ final class GuidedSetupStore: ObservableObject {
         return hasAnalyticsMark || hasLegacyAttendance
     }
 
-    func refresh(subjectCount: Int, hasMarked: Bool) {
+    func refresh(subjectCount: Int, hasMarked: Bool, hasClassDays: Bool = true, hasSomethingToMark: Bool = true) {
         guard defaults.bool(forKey: Keys.completed) == false else {
             activeStep = nil
             return
@@ -56,27 +57,37 @@ final class GuidedSetupStore: ObservableObject {
             return
         }
 
+        if hasClassDays == false {
+            showStep(.setClassDays)
+            return
+        }
+
+        if hasSomethingToMark == false {
+            activeStep = nil
+            return
+        }
+
         showStep(.markToday)
     }
 
     /// Call when onboarding finishes so the coach mark can appear on first Home visit.
-    func refreshAfterOnboarding(subjectCount: Int, hasMarked: Bool) {
-        refresh(subjectCount: subjectCount, hasMarked: hasMarked)
+    func refreshAfterOnboarding(subjectCount: Int, hasMarked: Bool, hasClassDays: Bool = true, hasSomethingToMark: Bool = true) {
+        refresh(
+            subjectCount: subjectCount,
+            hasMarked: hasMarked,
+            hasClassDays: hasClassDays,
+            hasSomethingToMark: hasSomethingToMark
+        )
     }
 
     func subjectWasAdded() {
         guard defaults.bool(forKey: Keys.completed) == false else { return }
         guard UserDefaults.standard.bool(forKey: "onboarding.didComplete") else { return }
-        showStep(.markToday)
+        showStep(.setClassDays)
     }
 
     func complete() {
         finishFlow(logCompleted: true)
-    }
-
-    func dismiss(step: GuidedSetupStep) {
-        AnalyticsService.shared.log(.guidedSetupDismissed(step: step.rawValue))
-        finishFlow(logCompleted: false)
     }
 
     /// Returning users with attendance history — skip coach marks without a completion event.
@@ -108,6 +119,7 @@ final class GuidedSetupStore: ObservableObject {
         activeStep = nil
         if logCompleted {
             AnalyticsService.shared.log(.guidedSetupCompleted)
+            NotificationService.requestAuthorizationIfNeeded()
         }
     }
 
