@@ -29,8 +29,8 @@ enum NotificationService {
 
         let content = UNMutableNotificationContent()
         let riskCopy = NotificationPersonalization.apply(
-            title: "\(subjectName): Attendance Alert",
-            body: "Your attendance is \(String(format: "%.1f", currentPercentage))% — tap to plan which classes you can skip."
+            title: "\(subjectName) at \(String(format: "%.0f", currentPercentage))% — danger zone",
+            body: "Tap to plan which lectures you can still skip safely."
         )
         content.title = riskCopy.title
         content.body = riskCopy.body
@@ -59,10 +59,10 @@ enum NotificationService {
 
         let content = UNMutableNotificationContent()
         let bufferBody = bunkAllowed > 0
-            ? "You can safely skip \(bunkAllowed) class\(bunkAllowed == 1 ? "" : "es") — tap to plan."
-            : "Attendance is \(String(format: "%.1f", currentPercentage))%. Tap to see your recovery path."
+            ? "Only \(bunkAllowed) safe skip\(bunkAllowed == 1 ? "" : "s") left under the line — tap to plan."
+            : "At \(String(format: "%.0f", currentPercentage))%. Thin buffer. Tap the recovery path."
         let bufferCopy = NotificationPersonalization.apply(
-            title: "\(subjectName): Low Attendance Buffer",
+            title: "\(subjectName): thin buffer · \(String(format: "%.0f", currentPercentage))%",
             body: bufferBody
         )
         content.title = bufferCopy.title
@@ -91,6 +91,11 @@ enum NotificationService {
     }
 
     static func scheduleImmediatePersonalityAlert(context: NotificationContext) {
+        // Cap in-app immediates — they inflate notif_scheduled and almost never open.
+        let defaults = UserDefaults.standard
+        let dayKey = NotificationCooldownStore.dayKey(Date())
+        let capKey = "notif.immediateDay.\(dayKey)"
+        guard defaults.integer(forKey: capKey) < 1 else { return }
         guard let payload = NotificationEngine.payload(for: .immediate, context: context) else { return }
         let identifier = "personality-immediate"
         let center = UNUserNotificationCenter.current()
@@ -105,11 +110,13 @@ enum NotificationService {
             reserved: false,
             context: context
         )
+        defaults.set(1, forKey: capKey)
         AnalyticsService.shared.log(.notificationScheduled(type: "personality_immediate"))
     }
 
     static func reschedulePersonalityReminders(context: NotificationContext) {
         let center = UNUserNotificationCenter.current()
+        let notificationsEnabled = UserDefaults.standard.object(forKey: "feature.notificationsEnabled") as? Bool ?? true
 
         center.getPendingNotificationRequests { pending in
             let stale = pending
@@ -127,60 +134,139 @@ enum NotificationService {
             if stale.isEmpty == false {
                 center.removePendingNotificationRequests(withIdentifiers: stale)
             }
+
+            guard notificationsEnabled else { return }
+
+            center.getNotificationSettings { settings in
+                guard settings.authorizationStatus == .authorized
+                    || settings.authorizationStatus == .provisional else { return }
+
+                DispatchQueue.main.async {
+                    NotificationCooldownStore.clearReserved()
+                    let now = Date()
+                    let calendar = Calendar.current
+                    _ = scheduleUpcomingEvenings(context: context, now: now, calendar: calendar)
+                    _ = scheduleUpcomingMornings(context: context, now: now, calendar: calendar)
+                    _ = scheduleNextWeekday(
+                        weekday: 2,
+                        hour: NotificationPersonalityConfig.mondayHour,
+                        slot: .monday,
+                        prefix: "personality-monday-",
+                        context: context,
+                        now: now,
+                        calendar: calendar
+                    )
+                    _ = scheduleNextWeekday(
+                        weekday: 6,
+                        hour: NotificationPersonalityConfig.fridayHour,
+                        slot: .friday,
+                        prefix: "personality-friday-",
+                        context: context,
+                        now: now,
+                        calendar: calendar
+                    )
+                    _ = scheduleWeeklyDigest(context: context, now: now, calendar: calendar)
+                }
+            }
         }
-        _ = context
     }
 
-    /// Day-2 local nudge if the user installed but never used Mark Today.
+    /// Day-2 + day-3 local nudges if they installed but never used Mark Today.
     static func scheduleDayTwoMarkNudgeIfNeeded() {
-        let center = UNUserNotificationCenter.current()
-        let identifier = "retention-day2-mark"
-        center.removePendingNotificationRequests(withIdentifiers: [identifier])
+        scheduleEarlyRetentionMarkNudgesIfNeeded()
+    }
 
+    /// Install+2 and install+3 evening “mark today” loop — cancel on first mark.
+    static func scheduleEarlyRetentionMarkNudgesIfNeeded() {
         let notificationsEnabled = UserDefaults.standard.object(forKey: "feature.notificationsEnabled") as? Bool ?? true
-        guard notificationsEnabled else { return }
-        guard AnalyticsService.shared.hasMarkedAtLeastOnce == false else { return }
+        let day2ID = "retention-day2-mark"
+        let day3ID = "retention-day3-mark"
+        let center = UNUserNotificationCenter.current()
+
+        guard notificationsEnabled else {
+            center.removePendingNotificationRequests(withIdentifiers: [day2ID, day3ID])
+            return
+        }
+        guard AnalyticsService.shared.hasMarkedAtLeastOnce == false else {
+            center.removePendingNotificationRequests(withIdentifiers: [day2ID, day3ID])
+            return
+        }
 
         let defaults = UserDefaults.standard
         guard let installDate = defaults.object(forKey: "analytics.installDate") as? Date else { return }
 
         let calendar = Calendar.current
-        let days = AnalyticsService.shared.daysSinceInstall
-        guard days >= 1, days <= 4 else { return }
+        let now = Date()
 
-        var fireComponents = calendar.dateComponents([.year, .month, .day], from: installDate)
-        fireComponents.day = (fireComponents.day ?? 0) + 2
-        fireComponents.hour = NotificationPersonalityConfig.eveningHour
-        fireComponents.minute = 0
+        center.getNotificationSettings { settings in
+            guard settings.authorizationStatus == .authorized
+                || settings.authorizationStatus == .provisional else { return }
 
-        guard let fireDate = calendar.date(from: fireComponents), fireDate > Date() else { return }
+            for dayOffset in [2, 3] {
+                let identifier = dayOffset == 2 ? day2ID : day3ID
+                let type = dayOffset == 2 ? "day2_mark" : "day3_mark"
+                let loggedKey = "notif.retentionLogged.\(type)"
 
-        let content = UNMutableNotificationContent()
-        let dayTwoCopy = NotificationPersonalization.apply(
-            title: "Haven't logged today yet?",
-            body: "Open Bunk Planner and mark today's class in one tap."
-        )
-        content.title = dayTwoCopy.title
-        content.body = dayTwoCopy.body
-        content.sound = .default
-        content.userInfo = [
-            "type": "day2_mark",
-            "deep_link": NotificationRoute.markToday.rawValue
-        ]
+                guard let fireDay = calendar.date(
+                    byAdding: .day,
+                    value: dayOffset,
+                    to: calendar.startOfDay(for: installDate)
+                ) else { continue }
 
-        let trigger = UNCalendarNotificationTrigger(
-            dateMatching: calendar.dateComponents([.year, .month, .day, .hour, .minute], from: fireDate),
-            repeats: false
-        )
-        let request = UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
-        center.add(request)
-        NotificationEngagementStore.recordScheduled()
-        AnalyticsService.shared.log(.notificationScheduled(type: "day2_mark"))
+                var fireComponents = calendar.dateComponents([.year, .month, .day], from: fireDay)
+                fireComponents.hour = NotificationPersonalityConfig.eveningHour
+                fireComponents.minute = 0
+                guard let fireDate = calendar.date(from: fireComponents), fireDate > now else {
+                    center.removePendingNotificationRequests(withIdentifiers: [identifier])
+                    continue
+                }
+
+                center.getPendingNotificationRequests { pending in
+                    let alreadyPending = pending.contains { $0.identifier == identifier }
+                    center.removePendingNotificationRequests(withIdentifiers: [identifier])
+
+                    let content = UNMutableNotificationContent()
+                    let copy = NotificationPersonalization.apply(
+                        title: dayOffset == 2
+                            ? "Day 2: log your first classes"
+                            : "Day 3: still haven’t marked?",
+                        body: dayOffset == 2
+                            ? "Tap Attend or Missed on Home — builds the week before shortage season."
+                            : "One tap keeps your % honest. Future-you skips the apology essay."
+                    )
+                    content.title = copy.title
+                    content.body = copy.body
+                    content.sound = .default
+                    content.userInfo = [
+                        "type": type,
+                        "deep_link": NotificationRoute.markToday.rawValue
+                    ]
+
+                    let trigger = UNCalendarNotificationTrigger(
+                        dateMatching: calendar.dateComponents(
+                            [.year, .month, .day, .hour, .minute],
+                            from: fireDate
+                        ),
+                        repeats: false
+                    )
+                    center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: trigger))
+
+                    if alreadyPending == false, defaults.bool(forKey: loggedKey) == false {
+                        defaults.set(true, forKey: loggedKey)
+                        NotificationEngagementStore.recordScheduled()
+                        AnalyticsService.shared.log(.notificationScheduled(type: type))
+                    }
+                }
+            }
+        }
     }
 
     static func cancelDayTwoMarkNudge() {
         UNUserNotificationCenter.current()
-            .removePendingNotificationRequests(withIdentifiers: ["retention-day2-mark"])
+            .removePendingNotificationRequests(withIdentifiers: [
+                "retention-day2-mark",
+                "retention-day3-mark"
+            ])
     }
 
     /// Same-day nudge when the user has data but hasn't marked today (8 PM local).
@@ -191,42 +277,112 @@ enum NotificationService {
     ) {
         let center = UNUserNotificationCenter.current()
         let identifier = "retention-evening-mark"
-        center.removePendingNotificationRequests(withIdentifiers: [identifier])
-
         let notificationsEnabled = UserDefaults.standard.object(forKey: "feature.notificationsEnabled") as? Bool ?? true
-        guard notificationsEnabled else { return }
-        guard hasSubjects else { return }
-        guard hasMarkedToday == false else { return }
-        guard pendingMarkCount > 0 else { return }
+        guard notificationsEnabled else {
+            center.removePendingNotificationRequests(withIdentifiers: [identifier])
+            return
+        }
+        guard hasSubjects else {
+            center.removePendingNotificationRequests(withIdentifiers: [identifier])
+            return
+        }
+        guard hasMarkedToday == false else {
+            center.removePendingNotificationRequests(withIdentifiers: [identifier])
+            return
+        }
+        // Still nudge on off-timetable days — empty Mark Today was killing the habit ping.
+        guard NotificationEngagementStore.canSendHabitNotification() else { return }
 
         let calendar = Calendar.current
         let now = Date()
         var fireComponents = calendar.dateComponents([.year, .month, .day], from: now)
         fireComponents.hour = NotificationPersonalityConfig.eveningHour
         fireComponents.minute = 0
-        guard let fireDate = calendar.date(from: fireComponents), fireDate > now else { return }
+        guard let tonight = calendar.date(from: fireComponents) else { return }
 
-        let pending = pendingMarkCount
-        let content = UNMutableNotificationContent()
-        let eveningCopy = NotificationPersonalization.apply(
-            title: pending > 1 ? "Mark \(pending) subjects" : "Mark today's class",
-            body: "Open Bunk Planner — Attend or Missed, one tap."
-        )
-        content.title = eveningCopy.title
-        content.body = eveningCopy.body
-        content.sound = .default
-        content.userInfo = [
-            "type": "evening_mark",
-            "deep_link": NotificationRoute.markToday.rawValue
-        ]
+        let fireDate: Date
+        if tonight > now {
+            fireDate = tonight
+        } else if calendar.isDateInToday(now) {
+            // Missed the 8 PM slot — nudge in 20 minutes while they're still around.
+            fireDate = now.addingTimeInterval(20 * 60)
+        } else {
+            return
+        }
 
-        let trigger = UNCalendarNotificationTrigger(
-            dateMatching: calendar.dateComponents([.year, .month, .day, .hour, .minute], from: fireDate),
-            repeats: false
-        )
-        center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: trigger))
-        NotificationEngagementStore.recordScheduled()
-        AnalyticsService.shared.log(.notificationScheduled(type: "evening_mark"))
+        let dayKey = NotificationCooldownStore.dayKey(fireDate, calendar: calendar)
+        let loggedKey = "notif.eveningLogged.\(dayKey)"
+
+        center.getNotificationSettings { settings in
+            guard settings.authorizationStatus == .authorized
+                || settings.authorizationStatus == .provisional else { return }
+
+            center.getPendingNotificationRequests { pending in
+                let alreadyPending = pending.contains { $0.identifier == identifier }
+                center.removePendingNotificationRequests(withIdentifiers: [identifier])
+                // One evening habit ping — drop the personality twin for the same night.
+                center.removePendingNotificationRequests(
+                    withIdentifiers: ["personality-evening-\(dayKey)"]
+                )
+
+                let pendingCount = max(0, pendingMarkCount)
+                let subjectWord = pendingCount == 1 ? "subject" : "subjects"
+                let eveningVariants: [(String, String)]
+                if pendingCount > 1 {
+                    eveningVariants = [
+                        ("\(pendingCount) \(subjectWord) still unmarked", "Tap Attend or Missed before tomorrow’s shortage panic."),
+                        ("Evening roll call: \(pendingCount) left", "Log them in 5 seconds — Home → Mark Today."),
+                        ("\(pendingCount) classes need a tap", "Fill the gap before mid-sems ask questions.")
+                    ]
+                } else if pendingCount == 1 {
+                    eveningVariants = [
+                        ("Mark today’s class", "Tap Attend or Missed before it becomes a mystery."),
+                        ("Did you go today?", "One tap on Home. Takes 5 seconds."),
+                        ("Log today’s attendance", "Your % stays honest only if you mark it.")
+                    ]
+                } else {
+                    eveningVariants = [
+                        ("Log today’s attendance", "No lecture on the timetable? Still mark holiday / off day."),
+                        ("Keep the streak honest", "Open Home and tap Attend, Missed, or No class."),
+                        ("Quick check-in", "Takes 5 seconds — then you’re done for tonight.")
+                    ]
+                }
+                let pick = eveningVariants[abs(dayKey.hashValue) % eveningVariants.count]
+                let eveningCopy = NotificationPersonalization.apply(title: pick.0, body: pick.1)
+                let content = UNMutableNotificationContent()
+                content.title = eveningCopy.title
+                content.body = eveningCopy.body
+                content.sound = .default
+                content.userInfo = [
+                    "type": "evening_mark",
+                    "deep_link": NotificationRoute.markToday.rawValue
+                ]
+
+                let trigger: UNNotificationTrigger
+                if fireDate == tonight, tonight > now {
+                    trigger = UNCalendarNotificationTrigger(
+                        dateMatching: calendar.dateComponents(
+                            [.year, .month, .day, .hour, .minute],
+                            from: fireDate
+                        ),
+                        repeats: false
+                    )
+                } else {
+                    trigger = UNTimeIntervalNotificationTrigger(
+                        timeInterval: max(60, fireDate.timeIntervalSince(now)),
+                        repeats: false
+                    )
+                }
+                center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: trigger))
+
+                // Log once per fire day — rebuilds were flooding notif_scheduled.
+                if alreadyPending == false, UserDefaults.standard.bool(forKey: loggedKey) == false {
+                    UserDefaults.standard.set(true, forKey: loggedKey)
+                    NotificationEngagementStore.recordScheduled()
+                    AnalyticsService.shared.log(.notificationScheduled(type: "evening_mark"))
+                }
+            }
+        }
     }
 
     static func cancelEveningMarkNudge() {
@@ -240,8 +396,8 @@ enum NotificationService {
         center.removePendingNotificationRequests(withIdentifiers: [identifier])
 
         let content = UNMutableNotificationContent()
-        content.title = "Holiday week won't affect your attendance"
-        content.body = "Mark holidays in Today's Classes so they don't count against you."
+        content.title = "Holiday week won’t hurt your %"
+        content.body = "Mark holidays in Today’s Classes so they don’t count toward shortage."
         content.sound = .default
 
         // Soft nudge ~36h after scheduling (used opportunistically).
@@ -260,8 +416,10 @@ enum NotificationService {
 
         let content = UNMutableNotificationContent()
         let recoveryCopy = NotificationPersonalization.apply(
-            title: "\(subjectName): Recovery Deadline",
-            body: "Plan a recovery streak. You still need \(recoveryNeeded) attended classes to get back on track."
+            title: "\(subjectName): need \(recoveryNeeded) attended",
+            body: recoveryNeeded == 1
+                ? "One class climbs you back. Show up, then log it."
+                : "\(recoveryNeeded) classes to climb back. Start with the next one."
         )
         content.title = recoveryCopy.title
         content.body = recoveryCopy.body
@@ -308,6 +466,80 @@ enum NotificationService {
             .removePendingNotificationRequests(withIdentifiers: ["focus-timer-segment-end"])
     }
 
+    /// Evening-before (8 PM) and due-morning (9 AM) reminders for the homework list.
+    static func rescheduleStudyTaskReminders(tasks: [StudyTask]) {
+        let center = UNUserNotificationCenter.current()
+        let prefix = "study-task-"
+        let notificationsEnabled = UserDefaults.standard.object(forKey: "feature.notificationsEnabled") as? Bool ?? true
+
+        center.getPendingNotificationRequests { pending in
+            let stale = pending
+                .map(\.identifier)
+                .filter { $0.hasPrefix(prefix) }
+            if stale.isEmpty == false {
+                center.removePendingNotificationRequests(withIdentifiers: stale)
+            }
+            guard notificationsEnabled else { return }
+
+            let calendar = Calendar.current
+            let now = Date()
+
+            for task in tasks {
+                guard let due = task.dueDate else { continue }
+                let dueDay = calendar.startOfDay(for: due)
+
+                if let evening = calendar.date(byAdding: .day, value: -1, to: dueDay) {
+                    var eveningParts = calendar.dateComponents([.year, .month, .day], from: evening)
+                    eveningParts.hour = 20
+                    eveningParts.minute = 0
+                    if let fire = calendar.date(from: eveningParts), fire > now {
+                        let content = UNMutableNotificationContent()
+                        content.title = "\(task.kind.title) tomorrow"
+                        content.body = "\(task.title)\(task.subjectName.isEmpty ? "" : " · \(task.subjectName)")"
+                        content.sound = .default
+                        content.userInfo = [
+                            "type": "study_task",
+                            "task_id": task.id.uuidString,
+                            "deep_link": NotificationRoute.home.rawValue
+                        ]
+                        let trigger = UNCalendarNotificationTrigger(dateMatching: eveningParts, repeats: false)
+                        center.add(
+                            UNNotificationRequest(
+                                identifier: "\(prefix)\(task.id.uuidString)-eve",
+                                content: content,
+                                trigger: trigger
+                            )
+                        )
+                        AnalyticsService.shared.log(.notificationScheduled(type: "study_task"))
+                    }
+                }
+
+                var morningParts = calendar.dateComponents([.year, .month, .day], from: dueDay)
+                morningParts.hour = 9
+                morningParts.minute = 0
+                if let fire = calendar.date(from: morningParts), fire > now {
+                    let content = UNMutableNotificationContent()
+                    content.title = "\(task.kind.title) today"
+                    content.body = "\(task.title)\(task.subjectName.isEmpty ? "" : " · \(task.subjectName)")"
+                    content.sound = .default
+                    content.userInfo = [
+                        "type": "study_task",
+                        "task_id": task.id.uuidString,
+                        "deep_link": NotificationRoute.home.rawValue
+                    ]
+                    let trigger = UNCalendarNotificationTrigger(dateMatching: morningParts, repeats: false)
+                    center.add(
+                        UNNotificationRequest(
+                            identifier: "\(prefix)\(task.id.uuidString)-am",
+                            content: content,
+                            trigger: trigger
+                        )
+                    )
+                }
+            }
+        }
+    }
+
     /// Clears and re-schedules local reminders for exams/assignments at T-7, T-3, T-1, and due-day morning.
     static func rescheduleDeadlineReminders(deadlines: [AcademicDeadline]) {
         let center = UNUserNotificationCenter.current()
@@ -344,14 +576,14 @@ enum NotificationService {
                     let courseBit = deadline.courseName.isEmpty ? "" : " · \(deadline.courseName)"
                     switch daysBefore {
                     case 0:
-                        content.title = "\(deadline.kind.title) today"
-                        content.body = "\(deadline.title)\(courseBit). Don't \(skipVerb) class — be ready."
+                        content.title = "\(deadline.kind.title) today · don’t miss class"
+                        content.body = "\(deadline.title)\(courseBit). Be ready — and log attendance."
                     case 1:
                         content.title = "\(deadline.kind.title) tomorrow"
-                        content.body = "\(deadline.title)\(courseBit). One day left."
+                        content.body = "\(deadline.title)\(courseBit). One day left — plan around the timetable."
                     default:
                         content.title = "\(deadline.kind.title) in \(daysBefore) days"
-                        content.body = "\(deadline.title)\(courseBit). Plan your attendance around it."
+                        content.body = "\(deadline.title)\(courseBit). Don’t \(skipVerb) into shortage season."
                     }
                     content.sound = .default
                     content.userInfo = ["type": "academic_deadline", "deadline_id": deadline.id.uuidString]
@@ -373,6 +605,7 @@ enum NotificationService {
         calendar: Calendar
     ) -> Int {
         let isPro = UserDefaults.standard.bool(forKey: "iap.isPro")
+            || ((UserDefaults.standard.object(forKey: "ads.inviteTrialUntil") as? Date) ?? .distantPast) > Date()
         let notificationsEnabled = UserDefaults.standard.object(forKey: "feature.notificationsEnabled") as? Bool ?? true
         guard isPro, notificationsEnabled, context.hasData else { return 0 }
 
@@ -390,14 +623,18 @@ enum NotificationService {
         let content = UNMutableNotificationContent()
         let attended = max(0, context.weeklyAttended)
         let missed = max(0, context.weeklyMissed)
+        let digestTitle: String
         let digestBody: String
         if context.atRiskSubjects > 0 {
-            digestBody = "Attended \(attended) · missed \(missed). \(context.atRiskSubjects) subject\(context.atRiskSubjects == 1 ? "" : "s") still need recovery."
+            let riskLabel = context.atRiskSubjects == 1 ? "1 subject" : "\(context.atRiskSubjects) subjects"
+            digestTitle = "Week check: \(riskLabel) at risk"
+            digestBody = "Attended \(attended) · missed \(missed). Open Insights before shortage season gets loud."
         } else {
-            digestBody = "Attended \(attended) · missed \(missed). You're in a good place — keep the streak."
+            digestTitle = "Week check: \(attended) attended · \(missed) missed"
+            digestBody = "You’re clear of the danger zone. Keep logging — mid-sems don’t wait."
         }
         let digestCopy = NotificationPersonalization.apply(
-            title: "Your week in attendance",
+            title: digestTitle,
             body: digestBody,
             firstName: context.firstName
         )

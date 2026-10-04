@@ -18,7 +18,7 @@ struct TermsOfUseView: View {
 
                 section(
                     title: "Features",
-                    body: "Free includes up to \(ProPurchaseConfiguration.freeSubjectLimit) subjects, attendance calculator, scenario simulator, trend graphs, timetable editor, risk alerts, and local notifications. Bunk Planner Pro unlocks unlimited subjects, ad-free use, subject forecasts, skip planner, custom Focus Timer, weekly digest, and PDF + CSV export."
+                    body: "Free includes up to \(ProPurchaseConfiguration.freeSubjectLimit) subjects, attendance calculator, scenario simulator, trend graphs, timetable editor, risk alerts, and local notifications. If you later have more than \(ProPurchaseConfiguration.freeSubjectLimit) subjects without Pro, extras stay on the device but cannot be marked until Pro is active. Bunk Planner Pro unlocks unlimited subjects, ad-free use, subject forecasts, skip planner, custom Focus Timer, weekly digest, and PDF + CSV export."
                 )
 
                 section(

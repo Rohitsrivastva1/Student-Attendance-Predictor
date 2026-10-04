@@ -28,7 +28,15 @@ final class StudentProfileStore: ObservableObject {
         self.defaults = defaults
         if let data = defaults.data(forKey: Keys.profileJSON),
            let decoded = try? decoder.decode(StudentProfile.self, from: data) {
-            profile = decoded
+            var migrated = decoded
+            let normalized = InstitutionNameQuality.normalizedForStorage(decoded.institutionName)
+            if normalized != decoded.institutionName {
+                migrated.institutionName = normalized
+                if let encoded = try? encoder.encode(migrated) {
+                    defaults.set(encoded, forKey: Keys.profileJSON)
+                }
+            }
+            profile = migrated
         } else {
             profile = .empty
         }
@@ -37,21 +45,29 @@ final class StudentProfileStore: ObservableObject {
     }
 
     func save(_ profile: StudentProfile, skipped: Bool) {
-        self.profile = profile
+        var cleaned = profile
+        cleaned.institutionName = InstitutionNameQuality.normalizedForStorage(profile.institutionName)
+        self.profile = cleaned
         didSkipProfile = skipped
         didCompleteProfileStep = true
         defaults.set(skipped, forKey: Keys.didSkip)
         defaults.set(true, forKey: Keys.didComplete)
-        if let data = try? encoder.encode(profile) {
+        if let data = try? encoder.encode(cleaned) {
             defaults.set(data, forKey: Keys.profileJSON)
         }
         NotificationCenter.default.post(name: .studentProfileDidUpdate, object: nil)
         AnalyticsService.shared.setUserProperty(skipped ? "skipped" : "completed", forName: "student_profile_status")
-        if profile.name.isEmpty == false {
-            AnalyticsService.shared.setUserProperty(String(profile.name.prefix(24)), forName: "student_name_initial")
+        if cleaned.name.isEmpty == false {
+            AnalyticsService.shared.setUserProperty(String(cleaned.name.prefix(24)), forName: "student_name_initial")
         }
-        if profile.classOrDegree.isEmpty == false {
-            AnalyticsService.shared.setUserProperty(String(profile.classOrDegree.prefix(32)), forName: "student_class")
+        if cleaned.classOrDegree.isEmpty == false {
+            AnalyticsService.shared.setUserProperty(String(cleaned.classOrDegree.prefix(32)), forName: "student_class")
+        }
+        if cleaned.institutionName.isEmpty == false {
+            AnalyticsService.shared.setUserProperty(
+                String(cleaned.institutionName.prefix(40)),
+                forName: "student_institution"
+            )
         }
     }
 

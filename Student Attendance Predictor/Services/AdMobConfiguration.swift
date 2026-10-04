@@ -15,7 +15,7 @@ enum AdMobConfiguration {
         /// Mapped to a dedicated unit configured for third-party mediation.
         static let insights = "insights-trend-forecast"
         static let overview = "overview-dashboard-subjects"
-        /// Natural break after the user marks attendance (interstitial) — deprecated / unused.
+        /// Natural break after every 2nd Mark Today (interstitial).
         static let afterDayMarked = "after_day_marked"
         /// Natural break on first Insights visit in a session (interstitial).
         static let afterInsightsOpened = "after_insights_opened"

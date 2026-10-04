@@ -176,9 +176,11 @@ private struct AdMobBannerContainer: View {
     var body: some View {
         AdMobBannerHost(placement: placement, isActive: isActive, isLoaded: $isLoaded, adHeight: $adHeight)
             .frame(maxWidth: .infinity)
-            .frame(height: isLoaded ? adHeight : 0)
+            // Always reserve ≥50pt so AdMob can score the slot as viewable (match→impress).
+            .frame(height: max(isLoaded ? adHeight : 50, 50))
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .clipped()
+            .accessibilityHidden(isLoaded == false)
     }
 }
 
@@ -222,14 +224,15 @@ private final class AdMobBannerHostViewController: UIViewController, BannerViewD
     private var retryCount = 0
     private var isCurrentLoadARetry = false
     private var didTryStandardBannerSize = false
-    private let maxQuickRetries = 2
+    private let maxQuickRetries = 1
     /// Ignore flick-through tab switches before spending a network request.
-    private let dwellBeforeRequestNanoseconds: UInt64 = 1_500_000_000
+    private let dwellBeforeRequestNanoseconds: UInt64 = 800_000_000
     /// Backoff when inventory returns no-fill (GAD error code 3).
-    private let noFillRetryNanoseconds: UInt64 = 30_000_000_000
-    private let defaultRetryNanoseconds: UInt64 = 5_000_000_000
+    private let noFillRetryNanoseconds: UInt64 = 45_000_000_000
+    private let defaultRetryNanoseconds: UInt64 = 8_000_000_000
     /// After quick retries are exhausted, keep trying while visible (AdMob-safe pace).
-    private let recoverRetryNanoseconds: UInt64 = 60_000_000_000
+    /// Console auto-refresh also runs — keep this slow to avoid dual-refresh races.
+    private let recoverRetryNanoseconds: UInt64 = 90_000_000_000
     private var dwellTask: Task<Void, Never>?
     private var recoverTask: Task<Void, Never>?
     var onLoadStateChanged: ((Bool, CGFloat) -> Void)?
@@ -354,7 +357,10 @@ private final class AdMobBannerHostViewController: UIViewController, BannerViewD
             scheduleLoadAfterDwell()
         } else if let bannerView, hasFilledAd, abs(width - loadedWidth) > 1 {
             loadedWidth = width
-            bannerView.adSize = adaptiveSize(for: width)
+            // Keep current size family; only refresh width for adaptive.
+            if didTryStandardBannerSize {
+                bannerView.adSize = adaptiveSize(for: width)
+            }
             onLoadStateChanged?(true, bannerView.adSize.size.height)
         }
     }
@@ -368,7 +374,14 @@ private final class AdMobBannerHostViewController: UIViewController, BannerViewD
         return 0
     }
 
-    /// Anchored adaptive — typically stronger fill than capped inline for content slots.
+    /// Prefer standard 320×50 first (stronger India fill); try adaptive after a no-fill.
+    private func preferredAdSize(for width: CGFloat) -> AdSize {
+        if didTryStandardBannerSize == false {
+            return AdSizeBanner
+        }
+        return adaptiveSize(for: width)
+    }
+
     private func adaptiveSize(for width: CGFloat) -> AdSize {
         let size = currentOrientationAnchoredAdaptiveBanner(width: width)
         return (size.size.width > 0 && size.size.height > 0) ? size : AdSizeBanner
@@ -399,7 +412,7 @@ private final class AdMobBannerHostViewController: UIViewController, BannerViewD
         hasRequested = true
         loadedWidth = width
 
-        let banner = BannerView(adSize: adaptiveSize(for: width))
+        let banner = BannerView(adSize: preferredAdSize(for: width))
         banner.adUnitID = AdMobConfiguration.resolvedBannerAdUnitID(for: placement)
         banner.rootViewController = self
         banner.delegate = self
@@ -414,6 +427,8 @@ private final class AdMobBannerHostViewController: UIViewController, BannerViewD
         ])
         bannerView = banner
         isCurrentLoadARetry = false
+        // Reserve height so AdMob can measure a viewable slot before first fill.
+        onLoadStateChanged?(false, 50)
         AnalyticsService.shared.log(.bannerAdRequested(placement: placement, isRetry: false))
         banner.load(AdMobService.makeAdRequest())
     }
@@ -426,10 +441,15 @@ private final class AdMobBannerHostViewController: UIViewController, BannerViewD
         recoverTask?.cancel()
         recoverTask = nil
         bannerView.delegate = self
-        onLoadStateChanged?(true, bannerView.adSize.size.height)
+        // Keep a stable viewable height — collapsing after load kills AdMob impressions.
+        let height = max(bannerView.adSize.size.height, 50)
+        onLoadStateChanged?(true, height)
         AnalyticsService.shared.log(.bannerAdLoaded(placement: placement))
         if isActive {
             beginVisibilityTracking()
+            // Some mediation partners delay impression callbacks; ensure the view is laid out.
+            view.setNeedsLayout()
+            view.layoutIfNeeded()
         }
         #if DEBUG
         print("[AdMob] Banner (\(placement)) loaded.")
@@ -448,22 +468,29 @@ private final class AdMobBannerHostViewController: UIViewController, BannerViewD
     }
 
     func bannerView(_ bannerView: BannerView, didFailToReceiveAdWithError error: Error) {
-        hasFilledAd = false
-        endVisibilityTrackingAndFlush()
-        onLoadStateChanged?(false, 0)
         let reason = AdMobService.analyticsReason(for: error)
+        let hadFill = hasFilledAd
         AnalyticsService.shared.log(
-            .bannerAdFailed(placement: placement, reason: reason, isRetry: isCurrentLoadARetry)
+            .bannerAdFailed(placement: placement, reason: reason, isRetry: isCurrentLoadARetry || hadFill)
         )
         #if DEBUG
         print("[AdMob] Banner (\(placement)) failed: \(reason) — \(error.localizedDescription)")
         #endif
+
+        // Keep a previously filled banner visible on refresh failure. Collapsing
+        // to height 0 killed AdMob show-of-matched and spiked fail analytics.
+        if hadFill {
+            return
+        }
+
+        endVisibilityTrackingAndFlush()
+        onLoadStateChanged?(false, 50)
         guard isActive else { return }
 
-        // Adaptive banners often no-fill in India; 320x50 still sells.
+        // If standard no-fills, try adaptive once.
         if didTryStandardBannerSize == false, Self.isNoFill(reason: reason, error: error) {
             didTryStandardBannerSize = true
-            bannerView.adSize = AdSizeBanner
+            bannerView.adSize = adaptiveSize(for: availableWidth() > 0 ? availableWidth() : loadedWidth)
             scheduleBannerReload(on: bannerView, afterNanoseconds: 2_000_000_000)
             return
         }
@@ -477,7 +504,6 @@ private final class AdMobBannerHostViewController: UIViewController, BannerViewD
             return
         }
 
-        // Stay alive: retry every 60s while the tab is visible (no-fill is often transient).
         scheduleRecoverReload()
     }
 

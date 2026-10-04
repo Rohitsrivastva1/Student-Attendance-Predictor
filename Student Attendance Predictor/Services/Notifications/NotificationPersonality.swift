@@ -99,8 +99,8 @@ enum NotificationPersonalityConfig {
         static let curiosity = "feature.notificationCuriosityEnabled"
     }
 
-    static let maxDailyNotifications = 3
-    static let emojiProbability = 0.35
+    static let maxDailyNotifications = 2
+    static let emojiProbability = 0.32
     static let closeToMinimumPoints = 3.0
     static let eveningHour = 20
     static let morningHour = 8
@@ -121,8 +121,9 @@ enum NotificationPersonalityConfig {
         set { UserDefaults.standard.set(newValue, forKey: Keys.humor) }
     }
 
+    /// Opt-in roast tone. Default off — never aimed at students already below the line.
     static var enableSavageMode: Bool {
-        get { UserDefaults.standard.object(forKey: Keys.savage) as? Bool ?? true }
+        get { UserDefaults.standard.object(forKey: Keys.savage) as? Bool ?? false }
         set { UserDefaults.standard.set(newValue, forKey: Keys.savage) }
     }
 
@@ -133,7 +134,7 @@ enum NotificationPersonalityConfig {
 
     static func cooldownHours(for category: PersonalityNotificationCategory) -> Double {
         switch category {
-        case .funny: return 48
+        case .funny: return 24
         case .curiosity: return 24
         case .savage: return 36
         case .bunkAvailable: return 24

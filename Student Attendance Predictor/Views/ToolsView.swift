@@ -14,6 +14,8 @@ struct ToolsView: View {
     @Binding var navigateToDeadlines: Bool
     @ObservedObject private var entitlements = AdEntitlementsStore.shared
     @ObservedObject private var focusTimer = FocusTimerService.shared
+    @ObservedObject private var syllabusStore = SyllabusStore.shared
+    @ObservedObject private var studyTasks = StudyTaskStore.shared
 
     @State private var showDeadlinesScreen = false
 
@@ -32,6 +34,9 @@ struct ToolsView: View {
     private var subjects: [SubjectSummary] { subjectStore.subjects }
     private var market: StudentMarket { StudentMarketStore.current }
 
+    /// Flip to `true` to show Syllabus again in Tools. Implementation stays in the project.
+    private static let showSyllabusInTools = false
+
     private let cyan = BrandColor.colorAccentPrimary
     private let gold = BrandColor.colorPremium
     private let coral = BrandColor.colorMissed
@@ -39,6 +44,10 @@ struct ToolsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             toolsHeader
+
+            if shouldShowFocusDiscoveryHero {
+                focusDiscoveryHero
+            }
 
             toolSection(title: "Study") {
                 NavigationLink {
@@ -52,6 +61,32 @@ struct ToolsView: View {
                     )
                 }
                 .buttonStyle(.plain)
+
+                NavigationLink {
+                    StudyTaskListScreen(subjects: subjects)
+                } label: {
+                    ToolHubRow(
+                        icon: "checkmark.circle.fill",
+                        tint: cyan,
+                        title: "Tasks",
+                        subtitle: tasksToolSubtitle
+                    )
+                }
+                .buttonStyle(.plain)
+
+                if Self.showSyllabusInTools {
+                    NavigationLink {
+                        SyllabusToolScreen(subjects: subjects)
+                    } label: {
+                        ToolHubRow(
+                            icon: "list.bullet.clipboard.fill",
+                            tint: cyan,
+                            title: "Syllabus",
+                            subtitle: syllabusToolSubtitle
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
 
                 NavigationLink {
                     AcademicsView(
@@ -97,7 +132,7 @@ struct ToolsView: View {
                         tint: cyan,
                         title: "Export Reports",
                         subtitle: exportToolSubtitle,
-                        showsLock: !entitlements.isPro
+                        showsLock: !entitlements.hasProFeatures
                     )
                 }
                 .buttonStyle(.plain)
@@ -133,10 +168,69 @@ struct ToolsView: View {
             Text("More tools")
                 .font(.system(size: 22, weight: .black, design: .rounded))
                 .foregroundStyle(.white)
-            Text("Focus, grades, and extras. Skip planner stays on Plan.")
+            Text("Focus, tasks, grades, and extras. Skip planner stays on Plan.")
                 .font(.system(size: 13, weight: .medium, design: .rounded))
                 .foregroundStyle(.white.opacity(0.6))
         }
+    }
+
+    /// W1 / first-use hook — Focus is the only Tools habit that reinforces daily return.
+    private var shouldShowFocusDiscoveryHero: Bool {
+        focusTimer.todayFocusMinutes == 0
+            && focusTimer.isRunning == false
+            && AnalyticsService.shared.daysSinceInstall < 14
+    }
+
+    private var focusDiscoveryHero: some View {
+        NavigationLink {
+            FocusTimerToolScreen(subjects: subjects)
+        } label: {
+            HStack(alignment: .center, spacing: 14) {
+                ZStack {
+                    Circle()
+                        .fill(cyan.opacity(0.2))
+                        .frame(width: 52, height: 52)
+                    Image(systemName: "brain.head.profile")
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundStyle(cyan)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Start a Focus session")
+                        .font(.system(size: 16, weight: .black, design: .rounded))
+                        .foregroundStyle(.white)
+                    Text("Mark done? Lock in 25 minutes on today’s subject.")
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.62))
+                        .multilineTextAlignment(.leading)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "play.fill")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.black.opacity(0.85))
+                    .frame(width: 36, height: 36)
+                    .background(Circle().fill(cyan))
+            }
+            .padding(16)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [cyan.opacity(0.18), Color.white.opacity(0.05)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(cyan.opacity(0.35), lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .simultaneousGesture(TapGesture().onEnded {
+            AnalyticsService.shared.log(.homePromoCardTapped(kind: "focus", action: "tools_hero"))
+            MultiFeatureEngagementStore.record(.focus)
+        })
     }
 
     @ViewBuilder
@@ -167,10 +261,41 @@ struct ToolsView: View {
         if focusTimer.isRunning {
             return "Session running · Live on Lock Screen"
         }
+        let streak = FocusSessionStore.shared.focusStreakDays
+        if streak >= 2 {
+            return "\(streak)-day focus streak · \(focusTimer.todayFocusMinutes)m today"
+        }
         if focusTimer.todayFocusMinutes > 0 {
             return "\(focusTimer.todayFocusMinutes)m focused today · \(focusTimer.todaySessionCount) session\(focusTimer.todaySessionCount == 1 ? "" : "s")"
         }
-        return "Pomodoro timer · topics · Lock Screen live"
+        if studyTasks.pending.isEmpty == false {
+            return "Pick a task from your list, or Other"
+        }
+        return "Pomodoro timer · pick a task or Other"
+    }
+
+    private var tasksToolSubtitle: String {
+        let due = studyTasks.dueSoon.count
+        if due > 0 {
+            return "\(due) due soon · photo to add more"
+        }
+        if studyTasks.pending.isEmpty == false {
+            return "\(studyTasks.pending.count) open · photo or paste"
+        }
+        return "Photo a diary or datesheet · one tap to add"
+    }
+
+    private var syllabusToolSubtitle: String {
+        let docs = syllabusStore.documents
+        if docs.isEmpty {
+            return "Photo or type · checklist · send to Focus"
+        }
+        let learned = docs.reduce(0) { $0 + $1.learnedCount }
+        let total = docs.reduce(0) { $0 + $1.totalTopicCount }
+        if total == 0 {
+            return "\(docs.count) syllabus · add topics to track"
+        }
+        return "\(learned) of \(total) topics learned"
     }
 
     private var gradesToolSubtitle: String {
@@ -196,7 +321,7 @@ struct ToolsView: View {
     }
 
     private var exportToolSubtitle: String {
-        if !entitlements.isPro {
+        if !entitlements.hasProFeatures {
             return "PDF summary & CSV log · Pro"
         }
         let count = subjects.count

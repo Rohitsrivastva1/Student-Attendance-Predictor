@@ -74,6 +74,54 @@ Rate limit: ~3 req/min per `client_user_id`.
 
 ---
 
+## Invites
+
+Same anonymous `client_user_id`. Reward is **7 days ad-free**, not Pro.
+
+### `POST /api/v1/bunk-planner/invite/ensure`
+
+```json
+{ "client_user_id": "550e8400-e29b-41d4-a716-446655440000" }
+```
+
+```json
+{
+  "ok": true,
+  "code": "ABC123",
+  "url": "https://schoolabe.com/i/ABC123",
+  "redeem_count": 0
+}
+```
+
+### `POST /api/v1/bunk-planner/invite/redeem`
+
+```json
+{
+  "client_user_id": "550e8400-e29b-41d4-a716-446655440000",
+  "code": "ABC123"
+}
+```
+
+Success: `{ "ok": true, "grant_days": 7, "code": "ABC123", "referrer_client_user_id": "…", "invitee_client_user_id": "…" }`
+
+Each redeem writes `bunk_planner_redemptions` (who invited whom) plus analytics events `invite_redeemed` / `invite_friend_joined`.
+
+`detail` tokens: `not-found` (404), `already_redeemed` (409), `self_redeem` (400), `cap_reached` (429).
+
+### `POST /api/v1/bunk-planner/invite/claim`
+
+Referrer applies pending days after friends redeem.
+
+```json
+{ "client_user_id": "uuid" }
+```
+
+```json
+{ "ok": true, "granted_days": 7, "redeem_count": 1, "code": "ABC123" }
+```
+
+---
+
 ## `DELETE /api/v1/bunk-planner/user-data`
 
 Soft flag: `data_deleted = true` (rows kept for tracking).
@@ -82,14 +130,15 @@ Soft flag: `data_deleted = true` (rows kept for tracking).
 
 ## Tables
 
-- `bunk_planner_users` — profile, meta, `last_active_date`, `is_pro`, soft-delete
+- `bunk_planner_users` — profile, meta, `last_active_date`, `is_pro`, invite credits, soft-delete
 - `bunk_planner_subjects` — replace per sync
 - `bunk_planner_attendance_entries` — replace per sync when `attendance_entries` sent
+- `bunk_planner_invites` / `bunk_planner_redemptions` — referral loop
 
-Migration: `o7p8q9r0s1t2_add_bunk_planner_attendance_log.py`
+Migration: `r0s1t2u3v4w5_add_bunk_planner_invites.py`
 
 ```bash
-alembic upgrade o7p8q9r0s1t2
+alembic upgrade r0s1t2u3v4w5
 ```
 
 ---
@@ -108,3 +157,9 @@ alembic upgrade o7p8q9r0s1t2
 ## Privacy
 
 Update App Store privacy labels: attendance history and product interaction leave the device. In-app Privacy Policy must match.
+
+---
+
+## Related
+
+- Syllabus AI structure (Groq): [`schoolabe-syllabus-structure-api.md`](schoolabe-syllabus-structure-api.md) — env `GROQ_SYLLABUS_API_KEY`

@@ -21,6 +21,7 @@ enum AttendanceIntentActions {
         await PersistenceController.shared.waitForStoreIfNeeded()
         let store = SubjectStore()
         let today = Date()
+        guard store.isSubjectLocked(subjectID) == false else { return }
         let scheduled = max(1, store.classesScheduledToday(for: subjectID, on: today))
         store.markDay(
             subjectID: subjectID,
@@ -39,6 +40,7 @@ enum AttendanceIntentActions {
         let today = Date()
         let targets = store.subjectsForMarkToday(on: today).filter {
             store.logEntry(subjectID: $0.id, date: today) == nil
+                && store.isSubjectLocked($0.id) == false
         }
 
         guard targets.isEmpty == false else {

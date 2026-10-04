@@ -3,6 +3,7 @@
 //  Student Attendance Predictor
 //
 //  Decides *what kind* of notification to send. Templates decide *how to say it*.
+//  Categories are gated by real attendance thresholds so copy never contradicts the numbers.
 //
 
 import Foundation
@@ -17,7 +18,6 @@ enum NotificationEngine {
 
         if NotificationCooldownStore.canSend(category: category, slot: slot, now: now) == false {
             if category.priority == .high {
-                // Humor must never replace a warning. Cooldown already covered this category.
                 return nil
             }
             if slot == .evening || slot == .monday || slot == .friday || slot == .morning,
@@ -45,7 +45,7 @@ enum NotificationEngine {
             if context.isCloseToMinimum {
                 return .attendanceWarning
             }
-            if context.safeBunks > 0, context.safeBunks <= 4 {
+            if context.hasRealBunkBuffer {
                 return .bunkAvailable
             }
             return nil
@@ -55,24 +55,34 @@ enum NotificationEngine {
                 return context.streakDays >= 2 ? .streak : nil
             }
             if context.hasData == false {
-                return witty && NotificationPersonalityConfig.enableCuriosity ? .curiosity : .classReminder
+                return witty && NotificationPersonalityConfig.enableHumor ? .funny : .classReminder
             }
+            // Below the line — supportive only. Never savage / bunk-available / “you can skip.”
             if context.attendancePercentage < context.requiredPercentage {
                 return .lowAttendance
             }
-            if context.isCloseToMinimum {
-                return savageIfAllowed(default: .bunkNotAvailable, witty: witty)
+            if context.isCloseToMinimum || context.safeBunks <= 1 {
+                return .attendanceWarning
             }
-            if context.trend == .declining, context.safeBunks <= 3 {
-                return savageIfAllowed(default: .attendanceWarning, witty: witty)
-            }
-            if context.safeBunks > 0 {
-                return pick([.bunkAvailable, witty && NotificationPersonalityConfig.enableCuriosity ? .curiosity : .bunkAvailable])
+            if context.hasRealBunkBuffer {
+                if shouldOfferSavage(context: context, witty: witty) {
+                    return .savage
+                }
+                var options: [PersonalityNotificationCategory] = [.bunkAvailable]
+                if witty && NotificationPersonalityConfig.enableHumor {
+                    options.append(.funny)
+                }
+                if witty,
+                   NotificationPersonalityConfig.enableCuriosity,
+                   context.attendanceMovedRecently {
+                    options.append(.curiosity)
+                }
+                return pick(options)
             }
             if witty && NotificationPersonalityConfig.enableHumor {
-                return pick([.funny, .curiosity])
+                return .funny
             }
-            return .curiosity
+            return .classReminder
 
         case .morning:
             guard context.classesToday > 0 else { return nil }
@@ -82,12 +92,12 @@ enum NotificationEngine {
 
         case .monday:
             if context.hasData == false {
-                return witty ? .curiosity : .classReminder
+                return witty ? .funny : .classReminder
             }
             if context.attendancePercentage < context.requiredPercentage {
                 return .lowAttendance
             }
-            if context.safeBunks > 0 {
+            if context.hasRealBunkBuffer {
                 return .bunkAvailable
             }
             if context.isCloseToMinimum {
@@ -96,21 +106,29 @@ enum NotificationEngine {
             return witty && NotificationPersonalityConfig.enableHumor ? .funny : .curiosity
 
         case .friday:
-            if context.hasData == false { return .curiosity }
+            if context.hasData == false { return .funny }
             if context.attendancePercentage < context.requiredPercentage {
                 return .lowAttendance
             }
-            if context.safeBunks > 0 { return .bunkAvailable }
-            return savageIfAllowed(default: .bunkNotAvailable, witty: witty)
+            if context.hasRealBunkBuffer {
+                if shouldOfferSavage(context: context, witty: witty) {
+                    return .savage
+                }
+                return .bunkAvailable
+            }
+            if context.isCloseToMinimum {
+                return .bunkNotAvailable
+            }
+            return .funny
         }
     }
 
-    private static func savageIfAllowed(
-        default fallback: PersonalityNotificationCategory,
-        witty: Bool
-    ) -> PersonalityNotificationCategory {
-        guard witty, NotificationPersonalityConfig.enableSavageMode else { return fallback }
-        return Int.random(in: 0...1) == 0 ? .savage : fallback
+    /// Savage is opt-in and only when the student has real spare bunks (not stressed / below line).
+    private static func shouldOfferSavage(context: NotificationContext, witty: Bool) -> Bool {
+        guard witty, NotificationPersonalityConfig.enableSavageMode else { return false }
+        guard context.hasRealBunkBuffer else { return false }
+        guard context.attendancePercentage >= context.requiredPercentage else { return false }
+        return Int.random(in: 0...3) == 0
     }
 
     private static func fallbackCategory(
@@ -122,11 +140,22 @@ enum NotificationEngine {
         let candidates: [PersonalityNotificationCategory]
         switch slot {
         case .evening:
-            candidates = [.curiosity, .funny, .classReminder]
+            if context.attendancePercentage < context.requiredPercentage {
+                candidates = [.lowAttendance]
+            } else if context.isCloseToMinimum {
+                candidates = [.attendanceWarning, .funny]
+            } else if context.hasRealBunkBuffer {
+                candidates = [.bunkAvailable, .funny, .classReminder]
+            } else {
+                candidates = [.funny, .classReminder]
+            }
         case .morning:
             candidates = [.classReminder]
         case .monday, .friday:
-            candidates = [.curiosity, .funny]
+            candidates = [.funny, .curiosity, .bunkAvailable].filter { cat in
+                if cat == .bunkAvailable { return context.hasRealBunkBuffer }
+                return true
+            }
         case .immediate:
             return nil
         }
@@ -179,11 +208,23 @@ enum NotificationEngine {
         slot: NotificationSlot,
         context: NotificationContext
     ) -> NotificationTemplate {
-        let pool = NotificationTemplates.pool(for: category)
+        var pool = NotificationTemplates.pool(for: category).filter { template in
+            if template.requiresRealBunkBuffer, context.hasRealBunkBuffer == false {
+                return false
+            }
+            if template.requiresAttendanceMove, context.attendanceMovedRecently == false {
+                return false
+            }
+            return true
+        }
+        if pool.isEmpty {
+            pool = NotificationTemplates.pool(for: category).filter {
+                $0.requiresAttendanceMove == false && $0.requiresRealBunkBuffer == false
+            }
+        }
         let recent = NotificationCooldownStore.recentlyUsedTemplateIDs()
         let fresh = pool.filter { recent.contains($0.id) == false }
-        let chosen = (fresh.isEmpty ? pool : fresh).randomElement()
+        return (fresh.isEmpty ? pool : fresh).randomElement()
             ?? NotificationTemplates.plain(slot: slot, context: context)
-        return chosen
     }
 }

@@ -76,7 +76,9 @@ struct ProPaywallView: View {
             didPurchaseSucceed = false
             didCancelCheckout = false
             AnalyticsService.shared.setLastProPaywallSource(source)
-            AnalyticsService.shared.log(.proPaywallViewed(source: source))
+            AnalyticsService.shared.setLastProPaywallLayout(paywallLayout)
+            AnalyticsService.shared.log(.proPaywallViewed(source: source, layout: paywallLayout))
+            SoftPaywallCoordinator.shared.confirmPresented(source: source)
             ProPurchaseService.shared.start()
             Task {
                 await purchaseService.loadProduct(surfaceFailure: true)
@@ -202,15 +204,21 @@ struct ProPaywallView: View {
                         .opacity(appearHero ? 1 : 0)
                         .offset(y: appearHero ? 0 : 18)
 
-                    featuresSection
-                        .opacity(appearFeatures ? 1 : 0)
-                        .offset(y: appearFeatures ? 0 : 16)
+                    if showsSkipPlannerPreview {
+                        skipPlannerPreviewSection
+                            .opacity(appearFeatures ? 1 : 0)
+                            .offset(y: appearFeatures ? 0 : 16)
+                    } else {
+                        featuresSection
+                            .opacity(appearFeatures ? 1 : 0)
+                            .offset(y: appearFeatures ? 0 : 16)
 
-                    comparisonTable
-                        .opacity(appearFeatures ? 1 : 0)
+                        comparisonTable
+                            .opacity(appearFeatures ? 1 : 0)
 
-                    comparisonChip
-                        .opacity(appearFeatures ? 1 : 0)
+                        comparisonChip
+                            .opacity(appearFeatures ? 1 : 0)
+                    }
                 }
                 .padding(.horizontal, 22)
                 .padding(.top, 8)
@@ -307,6 +315,128 @@ struct ProPaywallView: View {
                     .animation(.easeOut(duration: 0.45).delay(0.08 * Double(index)), value: appearFeatures)
             }
         }
+    }
+
+    /// First soft sheets lead with a blurred Skip Planner preview (intent match), not a generic feature list.
+    private var showsSkipPlannerPreview: Bool {
+        switch source {
+        case "habit_value", "at_risk_week", "at_risk_week_3", "streak_7":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private var paywallLayout: String {
+        showsSkipPlannerPreview ? "skip_planner_preview" : "feature_list"
+    }
+
+    private var skipPlannerPreviewSection: some View {
+        let skip = StudentMarketStore.current.skipVerb
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("YOUR SKIP PLANNER")
+                .font(.system(size: 11, weight: .heavy, design: .rounded))
+                .foregroundStyle(cyan)
+                .tracking(1.2)
+
+            ZStack {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("Thu · 25 Sep")
+                            .font(.system(size: 13, weight: .bold, design: .rounded))
+                            .foregroundStyle(cyan)
+                        Spacer()
+                        Text("Safe to \(skip)")
+                            .font(.system(size: 12, weight: .heavy, design: .rounded))
+                            .foregroundStyle(BrandColor.colorAttend)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(Capsule().fill(BrandColor.colorAttend.opacity(0.18)))
+                    }
+
+                    previewImpactRow(
+                        name: "DSA",
+                        detail: "2 classes · 82% → 78%",
+                        safe: true,
+                        note: "Still above 75% · 1 \(skip) left"
+                    )
+                    previewImpactRow(
+                        name: "Maths",
+                        detail: "1 class · 71% → 68%",
+                        safe: false,
+                        note: "Drops below your 75% target"
+                    )
+                    previewImpactRow(
+                        name: "Physics",
+                        detail: "1 class · 88% → 84%",
+                        safe: true,
+                        note: "Still above 75% · 3 \(skip)s left"
+                    )
+                }
+                .padding(16)
+                .background(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(Color.white.opacity(0.06))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                        )
+                )
+                .blur(radius: 4.5)
+                .allowsHitTesting(false)
+
+                VStack(spacing: 10) {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(gold)
+                    Text("Reveal which days stay safe")
+                        .font(.system(size: 16, weight: .black, design: .rounded))
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                    Text("Unlock Skip Planner — see the day before you \(skip).")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.72))
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 28)
+                .frame(maxWidth: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(Color.black.opacity(0.42))
+                )
+            }
+
+            Text("Your real subjects fill this once you unlock.")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(.white.opacity(0.45))
+        }
+    }
+
+    private func previewImpactRow(name: String, detail: String, safe: Bool, note: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Circle()
+                .fill(safe ? BrandColor.colorAttend : BrandColor.colorMissed)
+                .frame(width: 10, height: 10)
+                .padding(.top, 5)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(name)
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                Text(detail)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.55))
+                Text(note)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(safe ? BrandColor.colorAttend.opacity(0.9) : BrandColor.colorMissed.opacity(0.9))
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+        )
     }
 
     private func featureRow(icon: String, title: String, subtitle: String) -> some View {
@@ -434,11 +564,11 @@ struct ProPaywallView: View {
                             .font(.system(size: 15, weight: .bold))
                     }
                     Text(primaryCTATitle)
-                        .font(.system(size: 17, weight: .heavy, design: .rounded))
+                        .font(.system(size: 18, weight: .heavy, design: .rounded))
                 }
                 .foregroundStyle(.black)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 16)
+                .padding(.vertical, 18)
                 .background(
                     Capsule(style: .continuous)
                         .fill(BrandColor.premiumGradient)
@@ -454,6 +584,13 @@ struct ProPaywallView: View {
                     .foregroundStyle(gold.opacity(0.9))
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 8)
+            }
+
+            if StudentMarketStore.current == .india, isBusy == false, let price = resolvedDisplayPrice {
+                Text("\(price) · one-time · charged to Apple ID")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .multilineTextAlignment(.center)
             }
 
             Button {
@@ -577,7 +714,9 @@ struct ProPaywallView: View {
         case "streak_7":
             return "You earned the planner"
         case "habit_value":
-            return "Stop guessing this semester"
+            return market == .india ? "Don't bunk the wrong day" : "Don't skip the wrong day"
+        case "at_risk_week", "at_risk_week_3":
+            return "You're at risk — plan the recovery"
         default:
             return market == .india ? "Know before you bunk" : "Know before you skip"
         }
@@ -599,22 +738,32 @@ struct ProPaywallView: View {
         case "streak_7":
             return "You've been logging. Don't waste that streak on a guessed \(skip)."
         case "habit_value":
-            return "Your numbers are in. Unlock the map of which days stay safe."
+            return "Your numbers are in. Here's the map of which days stay safe — unlock to see yours."
+        case "at_risk_week", "at_risk_week_3":
+            return "Skip Planner shows which lectures you must attend to climb back above the line."
         default:
             return "Skip planner + forecast for every subject. Pay once. Keep it all semester."
         }
     }
 
-    private var priceAnchorLine: String {
+    /// StoreKit price when loaded; India falls back to live list ₹49 so copy never blanks.
+    private var resolvedDisplayPrice: String? {
         if let price = purchaseService.displayPrice {
+            return price
+        }
+        return StudentMarketStore.current == .india
+            ? ProPurchaseConfiguration.indiaListPriceDisplay
+            : nil
+    }
+
+    private var priceAnchorLine: String {
+        if let price = resolvedDisplayPrice {
             if StudentMarketStore.current == .india {
                 return "\(price) once · less than a canteen snack · no monthly"
             }
             return "\(price) once · no subscription · keep it forever"
         }
-        return StudentMarketStore.current == .india
-            ? "Pay once · no monthly · less than a canteen snack"
-            : "Pay once · no subscription · keep it forever"
+        return "Pay once · no subscription · keep it forever"
     }
 
     private var isBusy: Bool {
@@ -629,19 +778,18 @@ struct ProPaywallView: View {
     private var primaryCTATitle: String {
         switch purchaseService.phase {
         case .loading:
-            return "Loading…"
+            return "Loading price…"
         case .purchasing:
-            return "Unlocking…"
+            return "Starting…"
         default:
-            let price = purchaseService.displayPrice
-            let suffix = price.map { " — \($0)" } ?? ""
+            let price = resolvedDisplayPrice
             switch source {
-            case "skip_planner", "forecast", "locked_forecast":
-                return "Reveal my safe days\(suffix)"
+            case "skip_planner", "forecast", "locked_forecast", "habit_value", "streak_7", "at_risk_week", "at_risk_week_3":
+                return price.map { "Start — reveal safe days · \($0)" } ?? "Start — reveal safe days"
             case "subject_limit":
-                return "Unlock all subjects\(suffix)"
+                return price.map { "Start — unlock all subjects · \($0)" } ?? "Start — unlock all subjects"
             default:
-                return price.map { "Unlock Pro — \($0) once" } ?? "Unlock Pro — pay once"
+                return price.map { "Start Pro — \($0) once" } ?? "Start Pro — pay once"
             }
         }
     }
@@ -707,7 +855,8 @@ struct ProPaywallView: View {
                 source: source,
                 hadPrice: purchaseService.displayPrice != nil,
                 didStartPurchase: didStartPurchase,
-                secondsVisible: seconds
+                secondsVisible: seconds,
+                layout: paywallLayout
             )
         )
     }

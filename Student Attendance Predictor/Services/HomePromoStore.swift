@@ -47,7 +47,16 @@ enum HomePromoKind: String, CaseIterable {
 }
 
 enum HomePromoStore {
-    static func promoForCurrentWeek(date: Date = Date()) -> HomePromoKind {
+    /// Prefer Focus / Widget in week 1 — Export is weak for D1–D7 habit formation.
+    static func promoForCurrentWeek(
+        date: Date = Date(),
+        daysSinceInstall: Int = AnalyticsService.shared.daysSinceInstall
+    ) -> HomePromoKind {
+        if daysSinceInstall < 7 {
+            let early: [HomePromoKind] = [.focus, .widget, .skipPlanner, .focus]
+            let index = isoWeekNumber(date: date) % early.count
+            return early[index]
+        }
         let index = isoWeekNumber(date: date) % HomePromoKind.allCases.count
         return HomePromoKind.allCases[index]
     }

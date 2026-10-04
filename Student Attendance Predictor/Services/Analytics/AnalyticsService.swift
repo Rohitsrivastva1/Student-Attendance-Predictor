@@ -76,6 +76,7 @@ final class AnalyticsService {
         static let activeDaysInWeek = "analytics.activeDaysInWeek"
         static let lastLoggedWeeklyActiveDays = "analytics.lastLoggedWeeklyActiveDays"
         static let lastProPaywallSource = "analytics.lastProPaywallSource"
+        static let lastProPaywallLayout = "analytics.lastProPaywallLayout"
     }
 
     private var sessionBannerImpressions = 0
@@ -231,6 +232,15 @@ final class AnalyticsService {
         defaults.string(forKey: Keys.lastProPaywallSource) ?? "storekit_update"
     }
 
+    /// `skip_planner_preview` vs `feature_list` — join convert/dismiss rates by layout.
+    func setLastProPaywallLayout(_ layout: String) {
+        defaults.set(layout, forKey: Keys.lastProPaywallLayout)
+    }
+
+    var lastProPaywallLayout: String {
+        defaults.string(forKey: Keys.lastProPaywallLayout) ?? "feature_list"
+    }
+
     var daysSinceInstallBucket: String {
         switch daysSinceInstall {
         case 0: return "0"
@@ -256,6 +266,8 @@ final class AnalyticsService {
                     self.sessionInterstitialOverview += 1
                 case AdMobConfiguration.Placement.afterSubjectsOpened:
                     self.sessionInterstitialSubjects += 1
+                case AdMobConfiguration.Placement.afterDayMarked:
+                    self.sessionInterstitialOther += 1
                 default:
                     self.sessionInterstitialOther += 1
                 }

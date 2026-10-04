@@ -28,12 +28,12 @@ struct SkipPlannerToolScreen: View {
             VStack(alignment: .leading, spacing: 18) {
                 SkipPlannerWeekCard(
                     subjects: subjectStore.subjects,
-                    isPro: entitlements.isPro,
+                    isPro: entitlements.hasProFeatures,
                     onUnlock: presentSkipPlannerPaywall,
                     onSelectDay: { selectedDay = $0 }
                 )
 
-                if entitlements.isPro {
+                if entitlements.hasProFeatures {
                     rankedSkipDaysSection
                 }
             }
@@ -168,11 +168,7 @@ struct SemesterForecastToolScreen: View {
                     SemesterProgressStrip(progress: progress)
                 }
 
-                if entitlements.isForecastUnlocked {
-                    unlockedForecastContent
-                } else {
-                    lockedForecastContent
-                }
+                forecastContent
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 16)
@@ -204,13 +200,15 @@ struct SemesterForecastToolScreen: View {
         }
     }
 
-    private var unlockedForecastContent: some View {
+    private var forecastContent: some View {
         let forecasts = subjectStore.subjectForecasts(
             weeks: forecastWeeks,
             holidayClassCount: forecastHolidayClasses,
             expectedAbsences: forecastExpectedAbsences,
             fallbackClassesPerWeek: forecastClassesPerWeek
         )
+        let isLocked = entitlements.isForecastUnlocked == false
+        let previewID = subjectStore.dashboardSummary.mostAtRiskSubject?.id ?? forecasts.first?.id
 
         return VStack(alignment: .leading, spacing: 18) {
             plannedBunksInput
@@ -228,9 +226,35 @@ struct SemesterForecastToolScreen: View {
                         .foregroundStyle(.white.opacity(0.75))
                 } else {
                     ForEach(forecasts) { item in
-                        forecastRow(for: item)
+                        if isLocked, item.id != previewID {
+                            lockedForecastRow(for: item)
+                        } else {
+                            forecastRow(for: item)
+                        }
                     }
                 }
+            }
+
+            if isLocked {
+                Button {
+                    AnalyticsService.shared.log(.proCtaTapped(surface: "locked_forecast", action: "go_pro"))
+                    isShowingProPaywall = true
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "crown.fill")
+                            .font(.system(size: 13, weight: .bold))
+                        Text("Unlock the rest of your semester")
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
+                    }
+                    .foregroundStyle(.black.opacity(0.9))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(BrandColor.premiumGradient)
+                    )
+                }
+                .buttonStyle(.plain)
             }
         }
         .padding(16)
@@ -238,45 +262,30 @@ struct SemesterForecastToolScreen: View {
         .background(toolCardBackground)
     }
 
-    private var lockedForecastContent: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Image(systemName: "lock.fill")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(cyan)
-                Text("SUBJECT FORECAST")
-                    .font(.system(size: 12, weight: .black, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.55))
-                    .tracking(1.1)
+    private func lockedForecastRow(for item: SubjectForecast) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.subjectName)
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                Text("Semester landing is Pro")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.45))
             }
-
-            Text("See where each subject lands by the end of the semester — and which ones may fall below target.")
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.8))
-
-            Button {
-                AnalyticsService.shared.log(.proCtaTapped(surface: "locked_forecast", action: "go_pro"))
-                isShowingProPaywall = true
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "crown.fill")
-                        .font(.system(size: 13, weight: .bold))
-                    Text("Go Pro · Unlock forecast forever")
-                        .font(.system(size: 14, weight: .bold, design: .rounded))
-                }
-                .foregroundStyle(.black.opacity(0.9))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(
-                    Capsule(style: .continuous)
-                        .fill(BrandColor.premiumGradient)
-                )
-            }
-            .buttonStyle(.plain)
+            Spacer(minLength: 8)
+            Text("••%")
+                .font(.system(size: 22, weight: .black, design: .rounded))
+                .foregroundStyle(.white.opacity(0.28))
+                .blur(radius: 3)
+            Image(systemName: "lock.fill")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(BrandColor.colorPremium)
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(toolCardBackground)
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+        )
     }
 
     private var plannedBunksInput: some View {
@@ -476,7 +485,7 @@ struct ExportToolScreen: View {
                     tint: cyan,
                     title: "PDF Report",
                     subtitle: pdfSubtitle,
-                    isLocked: !entitlements.isPro,
+                    isLocked: !entitlements.hasProFeatures,
                     isLoading: isExportingPDF,
                     action: exportPDF
                 )
@@ -486,7 +495,7 @@ struct ExportToolScreen: View {
                     tint: gold,
                     title: "CSV Log",
                     subtitle: csvSubtitle,
-                    isLocked: !entitlements.isPro,
+                    isLocked: !entitlements.hasProFeatures,
                     isLoading: false,
                     action: exportCSV
                 )
@@ -516,7 +525,7 @@ struct ExportToolScreen: View {
         if subjectStore.subjects.isEmpty {
             return "Add subjects to export"
         }
-        return entitlements.isPro
+        return entitlements.hasProFeatures
             ? "Attendance summary\(gpaStore.courses.isEmpty ? "" : " + grades")"
             : "Pro · attendance summary PDF"
     }
@@ -525,7 +534,7 @@ struct ExportToolScreen: View {
         if subjectStore.subjects.isEmpty {
             return "Add subjects to export"
         }
-        return entitlements.isPro
+        return entitlements.hasProFeatures
             ? "Full attendance log for spreadsheets"
             : "Pro · CSV attendance log"
     }
@@ -588,7 +597,7 @@ struct ExportToolScreen: View {
 
     private func exportPDF() {
         AnalyticsService.shared.log(.pdfExportTapped)
-        guard entitlements.isPro else {
+        guard entitlements.hasProFeatures else {
             proPaywallSource = "pdf_export"
             isShowingProPaywall = true
             return
@@ -619,7 +628,7 @@ struct ExportToolScreen: View {
 
     private func exportCSV() {
         AnalyticsService.shared.log(.csvExportTapped)
-        guard entitlements.isPro else {
+        guard entitlements.hasProFeatures else {
             proPaywallSource = "csv_export"
             isShowingProPaywall = true
             return

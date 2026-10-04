@@ -60,9 +60,12 @@ final class SchoolabeAnalyticsBackend: AnalyticsBackend {
         "forecast_viewed", "locked_forecast_viewed", "trend_viewed", "dashboard_viewed",
         "tools_viewed", "settings_opened",
         "day_two_review_prompt_shown", "day_two_review_prompt_action", "review_prompt_shown",
+        "review_ask_unlocked", "review_ask_shown", "review_ask_action",
         "pro_cta_shown", "pro_cta_tapped", "pro_paywall_viewed",
         "pro_purchase_started", "pro_purchase_succeeded", "pro_purchase_failed",
-        "weekly_active_days", "streak_updated"
+        "weekly_active_days", "streak_updated",
+        "invite_link_shared", "invite_redeem_started", "invite_redeem_succeeded",
+        "invite_redeem_failed", "referral_reward_claimed"
     ]
 
     init(session: URLSession = .shared) {

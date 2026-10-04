@@ -26,6 +26,10 @@ enum ProPurchaseConfiguration {
         "com.schoolabe.bunkplanner.annual"
     ]
 
-    /// Free tier subject count. Users with more keep them (grandfathered) but cannot add until Pro.
+    /// India App Store list price for paywall copy when StoreKit product has not loaded yet.
+    /// Must match live ASC / Products.storekit (`49`). Do not use ROADMAP P3 ₹99/₹69.
+    static let indiaListPriceDisplay = "₹49"
+
+    /// Free tier subject count. Extra subjects stay on device but lock when Pro lapses.
     static let freeSubjectLimit = 3
 }

@@ -24,6 +24,10 @@ struct Student_Attendance_PredictorApp: App {
 
         // Begin Core Data store load before the first view needs it.
         _ = PersistenceController.shared
+
+        #if targetEnvironment(simulator)
+        print("Schoolabe API (simulator) → \(SchoolabeAPIConfiguration.syncURL?.absoluteString ?? "nil")")
+        #endif
     }
 
     var body: some Scene {
@@ -32,9 +36,13 @@ struct Student_Attendance_PredictorApp: App {
                 .trackScenePhase(scenePhase)
                 .onOpenURL { url in
                     AcquisitionAttribution.shared.handleIncomingURL(url)
+                    ReferralService.shared.handleIncomingURL(url)
                 }
                 .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
                     AcquisitionAttribution.shared.handleUserActivity(activity)
+                    if let url = activity.webpageURL {
+                        ReferralService.shared.handleIncomingURL(url)
+                    }
                 }
         }
     }

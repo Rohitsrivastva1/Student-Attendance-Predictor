@@ -37,6 +37,8 @@ struct NotificationContext: Equatable {
     var dayKey: String
     /// Calendar.weekday (1=Sun … 7=Sat) → classes across all subjects.
     var classesByWeekday: [Int: Int]
+    /// True when % moved enough since last snapshot — gates “something changed” curiosity.
+    var attendanceMovedRecently: Bool
 
     var roundedPercent: Int { Int(attendancePercentage.rounded()) }
     var roundedRequired: Int { Int(requiredPercentage.rounded()) }
@@ -45,6 +47,11 @@ struct NotificationContext: Equatable {
         guard hasData, isSafe else { return false }
         let margin = attendancePercentage - requiredPercentage
         return margin <= NotificationPersonalityConfig.closeToMinimumPoints || safeBunks <= 1
+    }
+
+    /// Real spare classes — not “barely over the line.”
+    var hasRealBunkBuffer: Bool {
+        hasData && isSafe && safeBunks >= 2
     }
 
     var shortSubjectName: String {
@@ -58,6 +65,14 @@ struct NotificationContext: Equatable {
         skipVerb.prefix(1).uppercased() + skipVerb.dropFirst()
     }
 
+    var skipNounSingular: String {
+        // Derived from plural: bunks→bunk, skips→skip
+        if skipNoun.hasSuffix("s"), skipNoun.count > 1 {
+            return String(skipNoun.dropLast())
+        }
+        return skipNoun
+    }
+
     var schedulingSignature: String {
         [
             dayKey,
@@ -69,27 +84,39 @@ struct NotificationContext: Equatable {
             hasLoggedToday ? "1" : "0",
             "\(classesToday)",
             NotificationPersonalityConfig.enableWittyCopy ? "w" : "p",
+            NotificationPersonalityConfig.enableSavageMode ? "s" : "n",
             UserDefaults.standard.bool(forKey: "iap.isPro") ? "pro" : "free",
-            trend.rawValue
+            trend.rawValue,
+            attendanceMovedRecently ? "m" : "u"
         ].joined(separator: "|")
     }
 
     func interpolations() -> [String: String] {
         let name = firstName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let bunks = max(0, safeBunks)
+        let recovery = max(0, recoveryNeeded)
+        let todayCount = max(0, classesToday)
+        let singular = skipNounSingular
+        let plural = skipNoun
         return [
             "attendance_percentage": "\(roundedPercent)%",
             "required_percentage": "\(roundedRequired)%",
-            "safe_bunks": "\(max(0, safeBunks))",
-            "recovery_needed": "\(max(0, recoveryNeeded))",
-            "classes_today": "\(max(0, classesToday))",
+            "safe_bunks": "\(bunks)",
+            "safe_bunks_label": bunks == 1 ? "1 \(singular)" : "\(bunks) \(plural)",
+            "recovery_needed": "\(recovery)",
+            "recovery_needed_label": recovery == 1 ? "1 class" : "\(recovery) classes",
+            "classes_today": "\(todayCount)",
+            "classes_today_label": todayCount == 1 ? "1 class" : "\(todayCount) classes",
             "subject_name": shortSubjectName,
             "first_name": name,
             "name_comma": name.isEmpty ? "" : "\(name), ",
             "name_hey": name.isEmpty ? "Hey" : "Hey \(name)",
             "skip_verb": skipVerb,
-            "skip_noun": skipNoun,
+            "skip_noun": plural,
+            "skip_noun_singular": singular,
             "skip_verb_title": skipVerbTitle,
-            "streak_days": "\(max(0, streakDays))"
+            "streak_days": "\(max(0, streakDays))",
+            "streak_days_label": streakDays == 1 ? "1 day" : "\(max(0, streakDays)) days"
         ]
     }
 
@@ -108,6 +135,7 @@ struct NotificationContext: Equatable {
         copy.hasData = subject.totalClasses > 0
         copy.skipVerb = skipVerb
         copy.skipNoun = skipNoun
+        copy.attendanceMovedRecently = false
         return copy
     }
 }

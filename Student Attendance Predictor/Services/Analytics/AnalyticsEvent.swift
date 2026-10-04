@@ -38,6 +38,11 @@ enum AnalyticsEvent {
     case defaultRequiredPercentageSaved(value: Int)
     case resultShared(status: String)
     case streakShared(days: Int)
+    case inviteLinkShared
+    case inviteRedeemStarted(source: String)
+    case inviteRedeemSucceeded(days: Int, code: String = "", referrerClientUserId: String = "")
+    case inviteRedeemFailed(reason: String)
+    case referralRewardClaimed(days: Int)
 
     // MARK: Subject management
     case subjectAdded(totalSubjects: Int)
@@ -180,6 +185,16 @@ enum AnalyticsEvent {
     case focusMarkPromptShown(minutes: Int, subjectName: String)
     case focusMarkPromptUsed(status: String)
     case focusMarkPromptDismissed
+    case syllabusAIStructured(unitCount: Int, topicCount: Int)
+    case syllabusFocusTopicsAdded(count: Int)
+    case syllabusTopicMarkedLearned(fromFocus: Bool)
+    case studyTaskCaptureStarted(source: String)
+    case studyTaskExtracted(count: Int, usedAI: Bool)
+    case studyTasksAdded(count: Int)
+    case studyTaskCompleted(kind: String)
+    case studyTaskTopicCovered
+    case focusTaskSelected(kind: String)
+    case focusTaskMarkedDone
     case siriSafestSkipRequested
     case siriMarkAllAttended(count: Int)
 
@@ -194,27 +209,31 @@ enum AnalyticsEvent {
     case schoolabeSyncFailed(reason: String)
     case schoolabeUserDataDeleted
     case userDataRemoveFailed(reason: String)
-    case softPaywallTriggered(source: String)
+    case softPaywallTriggered(source: String, daysSinceInstall: Int = 0, markCount: Int = 0, sessionSeconds: Int = 0)
 
     // MARK: Settings & misc
     case rateUsTapped
     case adPrivacyChoicesOpened
     case reviewPromptShown
-    case dayTwoReviewPromptShown(promptCount: Int)
-    case dayTwoReviewPromptAction(action: String, promptCount: Int)
+    case dayTwoReviewPromptShown(promptCount: Int, markCount: Int, trigger: String)
+    case dayTwoReviewPromptAction(action: String, promptCount: Int, markCount: Int)
+    /// Crossed the 5-mark threshold; custom review sheet can start asking.
+    case reviewAskUnlocked(markCount: Int)
+    case reviewAskShown(markCount: Int, promptCount: Int, trigger: String)
+    case reviewAskAction(action: String, markCount: Int, promptCount: Int)
 
     // MARK: Pro IAP
-    case proPaywallViewed(source: String)
+    case proPaywallViewed(source: String, layout: String = "feature_list")
     /// StoreKit price rendered on the paywall (or confirmed unavailable).
     case proPriceShown(source: String, price: String, currency: String, available: Bool)
     /// Left paywall via X / swipe without a successful purchase.
-    case proPaywallDismissed(source: String, hadPrice: Bool, didStartPurchase: Bool, secondsVisible: Int)
+    case proPaywallDismissed(source: String, hadPrice: Bool, didStartPurchase: Bool, secondsVisible: Int, layout: String = "feature_list")
     /// Soft / alert Pro CTA became visible (before tap).
     case proCtaShown(surface: String)
     /// Soft / alert Pro CTA action (`go_pro`, `not_now`, …).
     case proCtaTapped(surface: String, action: String)
     case proPurchaseStarted(source: String)
-    case proPurchaseSucceeded(source: String)
+    case proPurchaseSucceeded(source: String, layout: String = "feature_list")
     case proPurchaseFailed(source: String, reason: String)
     case proPurchaseCancelled(source: String)
     case proRestoreStarted
@@ -246,6 +265,11 @@ extension AnalyticsEvent {
         case .defaultRequiredPercentageSaved: return "default_pct_saved"
         case .resultShared: return "result_shared"
         case .streakShared: return "streak_shared"
+        case .inviteLinkShared: return "invite_link_shared"
+        case .inviteRedeemStarted: return "invite_redeem_started"
+        case .inviteRedeemSucceeded: return "invite_redeem_succeeded"
+        case .inviteRedeemFailed: return "invite_redeem_failed"
+        case .referralRewardClaimed: return "referral_reward_claimed"
 
         case .subjectAdded: return "subject_added"
         case .subjectRenamed: return "subject_renamed"
@@ -322,6 +346,16 @@ extension AnalyticsEvent {
         case .focusMarkPromptShown: return "focus_mark_prompt_shown"
         case .focusMarkPromptUsed: return "focus_mark_prompt_used"
         case .focusMarkPromptDismissed: return "focus_mark_prompt_dismissed"
+        case .syllabusAIStructured: return "syllabus_ai_structured"
+        case .syllabusFocusTopicsAdded: return "syllabus_focus_topics_added"
+        case .syllabusTopicMarkedLearned: return "syllabus_topic_marked_learned"
+        case .studyTaskCaptureStarted: return "study_task_capture_started"
+        case .studyTaskExtracted: return "study_task_extracted"
+        case .studyTasksAdded: return "study_tasks_added"
+        case .studyTaskCompleted: return "study_task_completed"
+        case .studyTaskTopicCovered: return "study_task_topic_covered"
+        case .focusTaskSelected: return "focus_task_selected"
+        case .focusTaskMarkedDone: return "focus_task_marked_done"
         case .siriSafestSkipRequested: return "siri_safest_skip_requested"
         case .siriMarkAllAttended: return "siri_mark_all_attended"
 
@@ -380,6 +414,9 @@ extension AnalyticsEvent {
         case .reviewPromptShown: return "review_prompt_shown"
         case .dayTwoReviewPromptShown: return "day_two_review_prompt_shown"
         case .dayTwoReviewPromptAction: return "day_two_review_prompt_action"
+        case .reviewAskUnlocked: return "review_ask_unlocked"
+        case .reviewAskShown: return "review_ask_shown"
+        case .reviewAskAction: return "review_ask_action"
 
         case .proPaywallViewed: return "pro_paywall_viewed"
         case .proPriceShown: return "pro_price_shown"
@@ -412,6 +449,7 @@ extension AnalyticsEvent {
              .atRiskSharePromptTapped,
              .siriShortcutsTipShown,
              .rateUsTapped, .adPrivacyChoicesOpened, .reviewPromptShown,
+             .inviteLinkShared,
              .settingsOpened, .timetableEditorOpened, .shareCancelled,
              .appOpenAdRequested, .appOpenAdShown,
              .proRestoreStarted, .proRestoreSucceeded, .proRestoreFailed,
@@ -465,6 +503,33 @@ extension AnalyticsEvent {
         case let .focusMarkPromptUsed(status):
             return ["status": status]
 
+        case let .syllabusAIStructured(unitCount, topicCount):
+            return ["unit_count": unitCount, "topic_count": topicCount]
+
+        case let .syllabusFocusTopicsAdded(count):
+            return ["count": count]
+
+        case let .syllabusTopicMarkedLearned(fromFocus):
+            return ["from_focus": fromFocus]
+
+        case let .studyTaskCaptureStarted(source):
+            return ["source": source]
+
+        case let .studyTaskExtracted(count, usedAI):
+            return ["count": count, "used_ai": usedAI]
+
+        case let .studyTasksAdded(count):
+            return ["count": count]
+
+        case let .studyTaskCompleted(kind):
+            return ["kind": kind]
+
+        case let .focusTaskSelected(kind):
+            return ["kind": kind]
+
+        case .studyTaskTopicCovered, .focusTaskMarkedDone:
+            return [:]
+
         case let .siriMarkAllAttended(count):
             return ["count": count]
 
@@ -492,11 +557,36 @@ extension AnalyticsEvent {
         case let .studentProfileUpdated(source):
             return ["source": source]
 
-        case let .dayTwoReviewPromptShown(promptCount):
-            return ["prompt_count": promptCount]
+        case let .dayTwoReviewPromptShown(promptCount, markCount, trigger):
+            return [
+                "prompt_count": promptCount,
+                "mark_count": markCount,
+                "trigger": trigger
+            ]
 
-        case let .dayTwoReviewPromptAction(action, promptCount):
-            return ["action": action, "prompt_count": promptCount]
+        case let .dayTwoReviewPromptAction(action, promptCount, markCount):
+            return [
+                "action": action,
+                "prompt_count": promptCount,
+                "mark_count": markCount
+            ]
+
+        case let .reviewAskUnlocked(markCount):
+            return ["mark_count": markCount]
+
+        case let .reviewAskShown(markCount, promptCount, trigger):
+            return [
+                "mark_count": markCount,
+                "prompt_count": promptCount,
+                "trigger": trigger
+            ]
+
+        case let .reviewAskAction(action, markCount, promptCount):
+            return [
+                "action": action,
+                "mark_count": markCount,
+                "prompt_count": promptCount
+            ]
 
         case let .schoolabeSyncSucceeded(subjectCount):
             return ["subject_count": subjectCount]
@@ -510,8 +600,12 @@ extension AnalyticsEvent {
         case let .userDataRemoveFailed(reason):
             return ["reason": String(reason.prefix(80))]
 
-        case let .softPaywallTriggered(source):
-            return ["source": source]
+        case let .softPaywallTriggered(source, daysSinceInstall, markCount, sessionSeconds):
+            var p: [String: Any] = ["source": source]
+            if daysSinceInstall > 0 { p["days_since_install"] = daysSinceInstall }
+            if markCount > 0 { p["mark_count"] = markCount }
+            if sessionSeconds > 0 { p["session_seconds"] = sessionSeconds }
+            return p
 
         case let .appLaunched(isReturningUser, launchTimeMs):
             var p: [String: Any] = ["is_returning_user": isReturningUser]
@@ -755,8 +849,8 @@ extension AnalyticsEvent {
         case let .streakUpdated(days):
             return ["days": days]
 
-        case let .proPaywallViewed(source):
-            return ["source": source]
+        case let .proPaywallViewed(source, layout):
+            return ["source": source, "layout": layout]
 
         case let .proPriceShown(source, price, currency, available):
             return [
@@ -766,12 +860,13 @@ extension AnalyticsEvent {
                 "available": available
             ]
 
-        case let .proPaywallDismissed(source, hadPrice, didStartPurchase, secondsVisible):
+        case let .proPaywallDismissed(source, hadPrice, didStartPurchase, secondsVisible, layout):
             return [
                 "source": source,
                 "had_price": hadPrice,
                 "did_start_purchase": didStartPurchase,
-                "seconds_visible": secondsVisible
+                "seconds_visible": secondsVisible,
+                "layout": layout
             ]
 
         case let .proCtaShown(surface):
@@ -783,8 +878,8 @@ extension AnalyticsEvent {
         case let .proPurchaseStarted(source):
             return ["source": source]
 
-        case let .proPurchaseSucceeded(source):
-            return ["source": source]
+        case let .proPurchaseSucceeded(source, layout):
+            return ["source": source, "layout": layout]
 
         case let .proPurchaseFailed(source, reason):
             return ["source": source, "reason": reason]
@@ -806,6 +901,23 @@ extension AnalyticsEvent {
 
         case let .multiFeatureWeeklyUser(featureCount, features):
             return ["feature_count": featureCount, "features": String(features.prefix(60))]
+
+        case let .inviteRedeemStarted(source):
+            return ["source": source]
+
+        case let .inviteRedeemSucceeded(days, code, referrerClientUserId):
+            var params: [String: Any] = ["days": days]
+            if code.isEmpty == false { params["code"] = code }
+            if referrerClientUserId.isEmpty == false {
+                params["referrer_client_user_id"] = referrerClientUserId
+            }
+            return params
+
+        case let .inviteRedeemFailed(reason):
+            return ["reason": String(reason.prefix(40))]
+
+        case let .referralRewardClaimed(days):
+            return ["days": days]
         }
     }
 }

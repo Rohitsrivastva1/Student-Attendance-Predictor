@@ -11,9 +11,9 @@ struct FocusTimerView: View {
 
     @ObservedObject private var entitlements = AdEntitlementsStore.shared
     @ObservedObject private var topicStore = FocusTopicStore.shared
+    @ObservedObject private var sessionStore = FocusSessionStore.shared
+    @ObservedObject private var taskStore = StudyTaskStore.shared
     @State private var isShowingProPaywall = false
-    @State private var isShowingAddTopic = false
-    @State private var newTopicName = ""
     @State private var topicStatsScope: FocusTopicStatsScope = .week
 
     private let cyan = BrandColor.colorAccentPrimary
@@ -82,23 +82,27 @@ struct FocusTimerView: View {
                 markPromptBanner
             }
 
+            focusTargetPicker
+
+            if timer.selectedTaskID == nil, subjects.isEmpty == false {
+                subjectPicker
+            }
+
             if timer.phase == .idle {
                 durationPicker
-                if entitlements.isPro {
+                if entitlements.hasProFeatures {
                     proControls
                 } else {
                     proTeaser
                 }
-            } else if entitlements.isPro {
+            } else if entitlements.hasProFeatures {
                 weeklyRecap
             }
 
-            if subjects.isEmpty == false {
-                subjectPicker
+            if taskStore.pending.isEmpty {
+                topicStatsSection
             }
-
-            topicPicker
-            topicStatsSection
+            studentStudyLog
 
             controls
         }
@@ -112,36 +116,68 @@ struct FocusTimerView: View {
                 )
         )
         .onAppear {
-            timer.clampToEntitlement(isPro: entitlements.isPro)
+            timer.clampToEntitlement(isPro: entitlements.hasProFeatures)
             timer.reconcileLiveActivityOnLaunchIfNeeded()
+            if timer.selectedTaskID == nil,
+               timer.phase == .idle,
+               let first = taskStore.pending.first {
+                timer.selectTask(first)
+            }
         }
-        .onChange(of: entitlements.isPro) { _, isPro in
-            timer.clampToEntitlement(isPro: isPro)
+        .onChange(of: entitlements.hasProFeatures) { _, isUnlocked in
+            timer.clampToEntitlement(isPro: isUnlocked)
         }
         .sheet(isPresented: $isShowingProPaywall) {
             ProPaywallView(source: "focus_custom")
         }
-        .alert("New topic", isPresented: $isShowingAddTopic) {
-            TextField("e.g. Calculus, Chapter 5", text: $newTopicName)
-            Button("Add") {
-                if let topic = topicStore.addTopic(name: newTopicName, subjectID: timer.taggedSubjectID) {
-                    topicStore.selectedTopicID = topic.id
-                }
-                newTopicName = ""
+        .confirmationDialog(
+            timer.pendingTaskWrapUp.map { "\($0.title)" } ?? "Session done",
+            isPresented: Binding(
+                get: { timer.pendingTaskWrapUp != nil },
+                set: { if $0 == false { timer.dismissTaskWrapUp() } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Continue") {
+                timer.continueSelectedTask()
             }
-            Button("Cancel", role: .cancel) {
-                newTopicName = ""
+            if let next = timer.pendingTaskWrapUp?.nextTitle {
+                Button("Next: \(next)") {
+                    timer.startNextPendingTask()
+                }
+            }
+            if let topic = timer.pendingTaskWrapUp?.firstUncoveredTopic {
+                Button("Covered: \(topic.title)") {
+                    timer.coverFirstTopicFromWrapUp()
+                }
+            }
+            Button("Mark done") {
+                timer.markSelectedTaskDone()
+            }
+            Button("Not now", role: .cancel) {
+                timer.dismissTaskWrapUp()
             }
         } message: {
-            Text(addTopicAlertMessage)
+            Text("Another block, the next task, or mark this done. 25 minutes does not auto-complete it.")
         }
-    }
-
-    private var addTopicAlertMessage: String {
-        if let subject = timer.taggedSubjectName {
-            return "Linked to \(subject). Track how long you spend on each topic."
+        .alert(
+            "Mark as learned?",
+            isPresented: Binding(
+                get: { timer.pendingSyllabusLearnPrompt != nil },
+                set: { if $0 == false { timer.dismissSyllabusLearnedPrompt() } }
+            )
+        ) {
+            Button("Mark learned") {
+                timer.confirmSyllabusLearned()
+            }
+            Button("Not yet", role: .cancel) {
+                timer.dismissSyllabusLearnedPrompt()
+            }
+        } message: {
+            if let title = timer.pendingSyllabusLearnPrompt?.title {
+                Text("Mark “\(title)” learned on your syllabus checklist?")
+            }
         }
-        return "Track how long you spend on each topic across sessions."
     }
 
     private var rankedTopicsForDisplay: [(topic: FocusTopic, minutes: Int)] {
@@ -153,6 +189,9 @@ struct FocusTimerView: View {
     }
 
     private var focusCenterCaption: String {
+        if let task = timer.selectedTask {
+            return task.title
+        }
         if let topic = topicStore.selectedTopic?.name {
             return topic
         }
@@ -225,7 +264,7 @@ struct FocusTimerView: View {
                     durationChip(minutes: minutes, locked: false)
                 }
                 ForEach(FocusTimerService.proQuickOptions, id: \.self) { minutes in
-                    durationChip(minutes: minutes, locked: entitlements.isPro == false)
+                    durationChip(minutes: minutes, locked: entitlements.hasProFeatures == false)
                 }
             }
         }
@@ -388,13 +427,11 @@ struct FocusTimerView: View {
                     tagChip(title: "None", selected: timer.taggedSubjectID == nil) {
                         timer.taggedSubjectID = nil
                         timer.taggedSubjectName = nil
-                        topicStore.syncSelectionWithSubject(nil)
                     }
                     ForEach(subjects) { subject in
                         tagChip(title: subject.name, selected: timer.taggedSubjectID == subject.id) {
                             timer.taggedSubjectID = subject.id
                             timer.taggedSubjectName = subject.name
-                            topicStore.syncSelectionWithSubject(subject.id)
                         }
                     }
                 }
@@ -402,69 +439,46 @@ struct FocusTimerView: View {
         }
     }
 
-    private var topicPicker: some View {
+    private var focusTargetPicker: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Topic (optional)")
-                    .font(.system(size: 12, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.5))
-                Spacer()
-                if topicStore.topics.isEmpty == false {
-                    Text("\(topicStore.topics.count) saved")
-                        .font(.system(size: 11, weight: .medium, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.35))
-                }
-            }
+            Text("What are you focusing on?")
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.5))
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    tagChip(title: "None", selected: topicStore.selectedTopicID == nil) {
-                        topicStore.clearSelection()
+                    ForEach(taskStore.pending.prefix(8)) { task in
+                        taskChip(task)
                     }
-
-                    ForEach(topicStore.topics(for: timer.taggedSubjectID)) { topic in
-                        topicChip(topic)
+                    tagChip(title: "Other", selected: timer.selectedTaskID == nil) {
+                        timer.selectOtherFocus()
                     }
-
-                    Button {
-                        newTopicName = ""
-                        isShowingAddTopic = true
-                    } label: {
-                        Label("Add", systemImage: "plus")
-                            .font(.system(size: 12, weight: .bold, design: .rounded))
-                            .foregroundStyle(gold)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(
-                                Capsule(style: .continuous)
-                                    .stroke(gold.opacity(0.45), lineWidth: 1)
-                            )
-                    }
-                    .buttonStyle(.plain)
                 }
             }
 
-            if topicStore.topics.isEmpty {
-                Text("Add topics like “Organic Chemistry” or “Paper 2” to see time per topic.")
+            if let task = timer.selectedTask {
+                Text("Now: \(task.title) · \(task.displaySubject)")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.45))
+            } else if taskStore.pending.isEmpty {
+                Text("No homework in the list. Photo it from Home, or start as Other.")
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(.white.opacity(0.4))
             }
         }
     }
 
-    private func topicChip(_ topic: FocusTopic) -> some View {
-        let selected = topicStore.selectedTopicID == topic.id
-        let weekMinutes = topicStore.minutes(for: topic.id, scope: .week)
+    private func taskChip(_ task: StudyTask) -> some View {
+        let selected = timer.selectedTaskID == task.id
         return Button {
-            topicStore.selectedTopicID = topic.id
+            timer.selectTask(task)
         } label: {
-            HStack(spacing: 4) {
-                Text(topic.name)
-                if weekMinutes > 0 {
-                    Text("\(weekMinutes)m")
-                        .font(.system(size: 10, weight: .bold, design: .rounded))
-                        .foregroundStyle(selected ? Color.black.opacity(0.55) : cyan.opacity(0.9))
-                }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(task.title)
+                    .lineLimit(1)
+                Text(task.dueLabel)
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(selected ? Color.black.opacity(0.55) : cyan.opacity(0.9))
             }
             .font(.system(size: 12, weight: .bold, design: .rounded))
             .foregroundStyle(selected ? .black : .white.opacity(0.85))
@@ -476,13 +490,72 @@ struct FocusTimerView: View {
             )
         }
         .buttonStyle(.plain)
-        .contextMenu {
-            Button(role: .destructive) {
-                topicStore.deleteTopic(id: topic.id)
-            } label: {
-                Label("Delete topic", systemImage: "trash")
+    }
+
+    private var studentStudyLog: some View {
+        let streak = sessionStore.focusStreakDays
+        let week = sessionStore.minutesByDayThisWeek()
+        let maxDay = max(week.map(\.minutes).max() ?? 1, 1)
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("YOUR STUDY LOG")
+                    .font(.system(size: 11, weight: .black, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.45))
+                    .tracking(1.1)
+                Spacer()
+                if streak > 0 {
+                    Text("\(streak)-day focus streak")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundStyle(gold)
+                }
+            }
+
+            HStack(alignment: .bottom, spacing: 6) {
+                ForEach(Array(week.enumerated()), id: \.offset) { _, entry in
+                    VStack(spacing: 4) {
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .fill(entry.minutes > 0 ? cyan : Color.white.opacity(0.08))
+                            .frame(height: max(6, CGFloat(entry.minutes) / CGFloat(maxDay) * 48))
+                        Text(shortWeekday(entry.day))
+                            .font(.system(size: 9, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.35))
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+            .frame(height: 70)
+
+            if sessionStore.recentSessions.isEmpty == false {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Recent")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.5))
+                    ForEach(sessionStore.recentSessions.prefix(5)) { session in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(session.topicName ?? session.subjectName ?? "Focus")
+                                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(.white)
+                                    .lineLimit(1)
+                                Text(session.endedAt, style: .date)
+                                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                                    .foregroundStyle(.white.opacity(0.4))
+                            }
+                            Spacer()
+                            Text("\(session.actualMinutes)m")
+                                .font(.system(size: 13, weight: .bold, design: .rounded))
+                                .foregroundStyle(session.completed ? cyan : .white.opacity(0.45))
+                        }
+                    }
+                }
             }
         }
+    }
+
+    private func shortWeekday(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEEEE"
+        return formatter.string(from: date)
     }
 
     private var topicStatsSection: some View {
@@ -591,6 +664,31 @@ struct FocusTimerView: View {
                 controlButton(title: "Reset", systemImage: "arrow.counterclockwise", tint: Color.white.opacity(0.35)) {
                     timer.reset()
                 }
+            }
+
+            if timer.phase == .focus {
+                Button {
+                    timer.skipToBreak()
+                } label: {
+                    Text("Skip to break")
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                }
+                .buttonStyle(.plain)
+            }
+
+            if entitlements.hasProFeatures {
+                Toggle(isOn: Binding(
+                    get: { timer.autoStartNextFocus },
+                    set: { timer.setAutoStartNextFocus($0) }
+                )) {
+                    Text("Auto-start next focus after break")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.75))
+                }
+                .tint(cyan)
             }
         }
     }

@@ -49,11 +49,19 @@ struct ContentView: View {
             await PersistenceController.shared.waitForStoreIfNeeded()
             let store = SubjectStore()
             store.performDeferredLaunchTasks()
+            #if DEBUG
+            // ASO/sim capture: xcrun simctl launch … -FillScreenshotDemo
+            if ProcessInfo.processInfo.arguments.contains("-FillScreenshotDemo") {
+                // Recovery / attend-needed Home for ASO frame 3 (+ widget snapshot).
+                store.fillASORecoveryScreenshot()
+            }
+            #endif
             subjectStore = store
             AnalyticsService.shared.appBecameReady()
             AppLaunchState.isMainContentReady = true
             FocusTimerService.shared.reconcileLiveActivityOnLaunchIfNeeded()
             AnalyticsUserProfile.sync(subjectStore: store)
+            ReferralService.shared.start()
             decideOnboarding(for: store)
             // Cold-start app-open: wait until onboarding is dismissed so it doesn't cover the intro.
             if UserDefaults.standard.bool(forKey: "onboarding.didComplete") {
@@ -75,9 +83,16 @@ struct ContentView: View {
             AppStoreReviewPromptCoordinator.shared.scheduleDayTwoPromptIfNeeded()
         }
         .onChange(of: scenePhase) { _, phase in
-            guard phase == .active else { return }
-            guard UserDefaults.standard.bool(forKey: "onboarding.didComplete") else { return }
-            AppStoreReviewPromptCoordinator.shared.scheduleDayTwoPromptIfNeeded()
+            switch phase {
+            case .active:
+                guard UserDefaults.standard.bool(forKey: "onboarding.didComplete") else { return }
+                AppStoreReviewPromptCoordinator.shared.scheduleDayTwoPromptIfNeeded()
+                ReferralService.shared.startForegroundRefresh()
+            case .background:
+                ReferralService.shared.stopForegroundRefresh()
+            default:
+                break
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .attendanceDataChanged)) { _ in
             subjectStore?.reloadFromExternalChange()

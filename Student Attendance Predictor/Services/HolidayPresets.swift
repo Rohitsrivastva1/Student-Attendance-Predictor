@@ -20,12 +20,32 @@ enum HolidayPresets {
         all.filter { $0.markets.contains(market) }
     }
 
+    static func sectionTitle(for market: StudentMarket) -> String {
+        switch market {
+        case .india: return "Breaks in India"
+        case .unitedStates: return "US breaks"
+        case .unitedKingdom: return "UK breaks"
+        case .other: return "Common breaks"
+        }
+    }
+
+    static func sectionSubtitle(for market: StudentMarket) -> String {
+        "Adds cancelled class days to your semester forecast — tap a break that matches your calendar."
+    }
+
     private static let all: [HolidayPreset] = [
         HolidayPreset(
             id: "diwali_week",
             title: "Diwali week",
             subtitle: "~1 week off",
             cancelledClasses: 5,
+            markets: [.india]
+        ),
+        HolidayPreset(
+            id: "holi",
+            title: "Holi",
+            subtitle: "Long weekend",
+            cancelledClasses: 2,
             markets: [.india]
         ),
         HolidayPreset(
@@ -50,6 +70,20 @@ enum HolidayPresets {
             markets: [.unitedStates]
         ),
         HolidayPreset(
+            id: "independence_us",
+            title: "July 4 week",
+            subtitle: "Long weekend",
+            cancelledClasses: 2,
+            markets: [.unitedStates]
+        ),
+        HolidayPreset(
+            id: "labor_day",
+            title: "Labor Day",
+            subtitle: "Long weekend",
+            cancelledClasses: 2,
+            markets: [.unitedStates]
+        ),
+        HolidayPreset(
             id: "winter_break_us",
             title: "Winter break",
             subtitle: "~2 weeks",
@@ -71,10 +105,24 @@ enum HolidayPresets {
             markets: [.unitedKingdom]
         ),
         HolidayPreset(
+            id: "may_half_term",
+            title: "May half-term",
+            subtitle: "~1 week",
+            cancelledClasses: 5,
+            markets: [.unitedKingdom]
+        ),
+        HolidayPreset(
             id: "christmas_uk",
             title: "Christmas break",
             subtitle: "~2 weeks",
             cancelledClasses: 10,
+            markets: [.unitedKingdom]
+        ),
+        HolidayPreset(
+            id: "summer_uk",
+            title: "Summer vacation",
+            subtitle: "Long vacation",
+            cancelledClasses: 20,
             markets: [.unitedKingdom]
         ),
         HolidayPreset(
@@ -83,6 +131,13 @@ enum HolidayPresets {
             subtitle: "No lectures",
             cancelledClasses: 4,
             markets: [.unitedKingdom, .unitedStates, .other]
+        ),
+        HolidayPreset(
+            id: "midterm_break",
+            title: "Mid-term break",
+            subtitle: "Short pause",
+            cancelledClasses: 3,
+            markets: [.other]
         )
     ]
 }

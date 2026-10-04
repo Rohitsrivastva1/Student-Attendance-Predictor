@@ -17,6 +17,7 @@ struct OnboardingProfileView: View {
     @Binding var age: Int?
     @Binding var classOrDegree: String
     @Binding var institutionName: String
+    var inviteCode: Binding<String>? = nil
     var style: Style = .onboarding
     var onContinue: () -> Void
     var onCancel: (() -> Void)?
@@ -24,7 +25,7 @@ struct OnboardingProfileView: View {
     @FocusState private var focusedField: Field?
 
     private enum Field: Hashable {
-        case name, classOrDegree, institution
+        case name, classOrDegree, inviteCode
     }
 
     private let cyan = BrandColor.colorAccentPrimary
@@ -47,6 +48,7 @@ struct OnboardingProfileView: View {
         trimmedName.isEmpty == false
             && trimmedClass.isEmpty == false
             && trimmedInstitution.isEmpty == false
+            && InstitutionNameQuality.looksIncomplete(trimmedInstitution) == false
     }
 
     var body: some View {
@@ -82,14 +84,19 @@ struct OnboardingProfileView: View {
                             title: "Where do you study?",
                             icon: "building.columns.fill",
                             isValid: trimmedInstitution.isEmpty == false
+                                && InstitutionNameQuality.looksIncomplete(trimmedInstitution) == false
                         ) {
-                            TextField("School or college name", text: $institutionName)
-                                .focused($focusedField, equals: .institution)
-                                .textContentType(.organizationName)
-                                .submitLabel(.done)
+                            InstitutionAutocompleteField(
+                                institutionName: $institutionName,
+                                accent: cyan
+                            )
                         }
 
                         ageSection
+
+                        if style == .onboarding, let inviteCode {
+                            inviteCodeSection(inviteCode)
+                        }
                     }
                 }
                 .padding(.horizontal, 24)
@@ -228,7 +235,7 @@ struct OnboardingProfileView: View {
                 TextField("e.g. B.Tech 2nd year", text: $classOrDegree)
                     .focused($focusedField, equals: .classOrDegree)
                     .submitLabel(.next)
-                    .onSubmit { focusedField = .institution }
+                    .onSubmit { focusedField = nil }
             }
 
             ScrollView(.horizontal, showsIndicators: false) {
@@ -237,7 +244,7 @@ struct OnboardingProfileView: View {
                         let selected = classOrDegree == chip.rawValue
                         Button {
                             classOrDegree = chip.rawValue
-                            focusedField = .institution
+                            focusedField = nil
                         } label: {
                             Text(chip.rawValue)
                                 .font(.system(size: 12, weight: .bold, design: .rounded))
@@ -280,6 +287,59 @@ struct OnboardingProfileView: View {
                     }
                 }
             }
+        }
+    }
+
+    private func inviteCodeSection(_ code: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "gift.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(cyan.opacity(0.85))
+                Text("Have a friend’s code?")
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.45))
+                Text("· optional")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.28))
+                Spacer(minLength: 6)
+                Text("7 days Pro features")
+                    .font(.system(size: 10, weight: .heavy, design: .rounded))
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Capsule(style: .continuous).fill(cyan))
+            }
+
+            HStack(spacing: 10) {
+                TextField("ABC123", text: code)
+                    .focused($focusedField, equals: .inviteCode)
+                    .textInputAutocapitalization(.characters)
+                    .autocorrectionDisabled()
+                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .submitLabel(.done)
+                    .onChange(of: code.wrappedValue) { _, newValue in
+                        let normalized = CrockfordBase32.normalize(newValue)
+                        let clipped = String(normalized.prefix(6))
+                        if clipped != newValue {
+                            code.wrappedValue = clipped
+                        }
+                    }
+
+                if CrockfordBase32.isValid(code.wrappedValue) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(mint)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 11)
+            .background(fieldBackground(focused: focusedField == .inviteCode))
+
+            Text("Skip if you don’t have one. A valid code unlocks all Pro features for 7 days for both of you. Ads stay on.")
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(.white.opacity(0.38))
         }
     }
 
@@ -353,8 +413,10 @@ struct OnboardingProfileView: View {
 
     private func focusedFieldMatches(title: String, icon: String) -> Bool {
         switch (title, focusedField) {
-        case ("What should we call you?", .name), ("Class / degree", .classOrDegree), ("Where do you study?", .institution):
+        case ("What should we call you?", .name), ("Class / degree", .classOrDegree):
             return true
+        case (_, .inviteCode):
+            return false
         default:
             return false
         }
@@ -408,7 +470,7 @@ struct StudentProfileEditorView: View {
             name: name.trimmingCharacters(in: .whitespacesAndNewlines),
             age: age,
             classOrDegree: classOrDegree.trimmingCharacters(in: .whitespacesAndNewlines),
-            institutionName: institutionName.trimmingCharacters(in: .whitespacesAndNewlines)
+            institutionName: InstitutionNameQuality.normalizedForStorage(institutionName)
         )
         profileStore.update(profile)
         AnalyticsService.shared.log(.studentProfileUpdated(source: "settings"))

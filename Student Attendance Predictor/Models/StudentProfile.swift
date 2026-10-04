@@ -30,6 +30,7 @@ struct StudentProfile: Codable, Equatable {
         name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
             && classOrDegree.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
             && institutionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            && InstitutionNameQuality.looksIncomplete(institutionName) == false
     }
 }
 

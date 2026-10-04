@@ -2,10 +2,10 @@
 //  AdMobInterstitialService.swift
 //  Student Attendance Predictor
 //
-//  Full-screen interstitials at natural breakpoints (first Insights / Overview
-//  visit and first Subjects open per launch). Never after Mark Today — that
-//  habit loop stays clean. Frequency caps (~90s, 3/session, 6/day in release)
-//  keep volume from feeling spammy.
+//  Full-screen interstitials at natural breakpoints:
+//  - every 3rd non-holiday Mark Today (not every tap — avoids habit spam)
+//  - first Insights / Overview / Subjects visit per launch
+//  Tight frequency caps keep volume from feeling spammy.
 //
 
 import Foundation
@@ -27,16 +27,23 @@ final class AdMobInterstitialService: NSObject {
     #if DEBUG
     private let minIntervalBetweenAds: TimeInterval = 30
     #else
-    private let minIntervalBetweenAds: TimeInterval = 90
+    private let minIntervalBetweenAds: TimeInterval = 2 * 60
     #endif
-    /// Max interstitials per app launch (Insights + Overview + Subjects).
+    /// Max interstitials per app launch (tabs + occasional mark).
     private let maxPerSession = 3
-    /// Max interstitials per calendar day.
-    private let maxPerDay = 6
+    /// Max interstitials per calendar day (all placements).
+    private let maxPerDay = 5
+    /// Extra guard: Mark Today placement alone can’t dominate the day.
+    private let maxMarkInterstitialsPerDay = 2
+    /// Show after every Nth new Mark Today — 3 keeps revenue without every-other-tap spam.
+    private let marksBetweenInterstitials = 3
 
     private let lastShownKey = "ads.interstitial.lastShown"
     private let dailyCountKey = "ads.interstitial.dailyCount"
     private let dailyCountDateKey = "ads.interstitial.dailyCountDate"
+    private let markCountKey = "ads.interstitial.markCount"
+    private let markDailyCountKey = "ads.interstitial.markDailyCount"
+    private let markDailyCountDateKey = "ads.interstitial.markDailyCountDate"
 
     private var sessionCount = 0
     /// Each main exploration surface fires at most once per process launch.
@@ -44,6 +51,7 @@ final class AdMobInterstitialService: NSObject {
     private var didShowOverviewInterstitialThisSession = false
     private var didShowSubjectsInterstitialThisSession = false
     private var sdkReadyObserver: NSObjectProtocol?
+    private var pendingMarkShowTask: Task<Void, Never>?
 
     #if canImport(GoogleMobileAds)
     private var interstitialAd: InterstitialAd?
@@ -57,6 +65,8 @@ final class AdMobInterstitialService: NSObject {
     private let adExpirationInterval: TimeInterval = 55 * 60
     private let maxLoadAttempts = 3
     private let retryDelayNanoseconds: UInt64 = 2_000_000_000
+    /// Let Mark Today celebration finish before taking the screen.
+    private let markShowDelayNanoseconds: UInt64 = 2_000_000_000
     #endif
 
     private override init() {
@@ -71,6 +81,7 @@ final class AdMobInterstitialService: NSObject {
     }
 
     deinit {
+        pendingMarkShowTask?.cancel()
         if let sdkReadyObserver {
             NotificationCenter.default.removeObserver(sdkReadyObserver)
         }
@@ -82,10 +93,22 @@ final class AdMobInterstitialService: NSObject {
         #endif
     }
 
-    /// Legacy placement — Mark Today no longer triggers interstitials (habit-loop protection).
-    @available(*, deprecated, message: "Do not call after Mark Today; use tryShowAfterInsightsOpened / Overview instead.")
-    func tryShowAfterDayMarked() {
-        tryShow(placement: AdMobConfiguration.Placement.afterDayMarked)
+    /// Call after each new non-holiday Mark Today. Shows at most every 3rd mark,
+    /// and at most `maxMarkInterstitialsPerDay` from this placement.
+    func recordAttendanceMarkAndMaybeShow() {
+        let defaults = UserDefaults.standard
+        let next = defaults.integer(forKey: markCountKey) + 1
+        defaults.set(next, forKey: markCountKey)
+
+        guard next % marksBetweenInterstitials == 0 else {
+            preload()
+            return
+        }
+        guard markInterstitialsRemainingToday() else {
+            preload()
+            return
+        }
+        scheduleMarkInterstitial()
     }
 
     /// Shows an interstitial on the first Insights visit this launch (natural tab transition).
@@ -109,6 +132,18 @@ final class AdMobInterstitialService: NSObject {
         tryShow(placement: AdMobConfiguration.Placement.afterSubjectsOpened)
     }
 
+    private func scheduleMarkInterstitial() {
+        #if canImport(GoogleMobileAds)
+        pendingMarkShowTask?.cancel()
+        pendingMarkShowTask = Task { @MainActor in
+            preload()
+            try? await Task.sleep(nanoseconds: markShowDelayNanoseconds)
+            guard Task.isCancelled == false else { return }
+            tryShow(placement: AdMobConfiguration.Placement.afterDayMarked)
+        }
+        #endif
+    }
+
     /// Attempts to present a loaded interstitial when frequency caps and entitlements allow.
     func tryShow(placement: String) {
         #if canImport(GoogleMobileAds)
@@ -121,7 +156,7 @@ final class AdMobInterstitialService: NSObject {
                 logSkip(placement: placement, reason: "ads_removed_reward_active")
                 return
             }
-            if canShowUnderFrequencyCap() == false {
+            if canShowUnderFrequencyCap(placement: placement) == false {
                 logSkip(placement: placement, reason: "frequency_cap")
                 return
             }
@@ -140,11 +175,14 @@ final class AdMobInterstitialService: NSObject {
             guard let ad = interstitialAd else {
                 logSkip(placement: placement, reason: "not_loaded")
                 AnalyticsService.shared.log(.interstitialAdFailed(placement: placement, reason: "not_loaded"))
+                preload()
                 return
             }
 
-            // Let SwiftUI finish the tap animation before taking over the screen.
-            try? await Task.sleep(nanoseconds: 280_000_000)
+            // Mark placement already waited ~2s — short settle only for tab opens.
+            if placement != AdMobConfiguration.Placement.afterDayMarked {
+                try? await Task.sleep(nanoseconds: 280_000_000)
+            }
 
             guard AdMobFullScreenGate.tryAcquire() else {
                 logSkip(placement: placement, reason: "fullscreen_gate_busy")
@@ -159,7 +197,6 @@ final class AdMobInterstitialService: NSObject {
                 return
             }
 
-            // Re-check availability after the short wait — avoid presenting a stale ref.
             guard presentingAd == nil else {
                 AdMobFullScreenGate.release()
                 logSkip(placement: placement, reason: "already_showing")
@@ -176,7 +213,7 @@ final class AdMobInterstitialService: NSObject {
             AnalyticsService.shared.log(.interstitialAdRequested(placement: placement))
 
             #if DEBUG
-            print("[AdMob] Interstitial presenting from \(String(describing: type(of: root))).")
+            print("[AdMob] Interstitial presenting (\(placement)) from \(String(describing: type(of: root))).")
             #endif
             ad.present(from: root)
         }
@@ -236,10 +273,14 @@ final class AdMobInterstitialService: NSObject {
     }
 
     private func cleanupAfterPresentation() {
+        let placement = pendingPlacement
         pendingPlacement = nil
         presentingAd = nil
         didRecordThisPresentation = false
         AdMobFullScreenGate.release()
+        if placement == AdMobConfiguration.Placement.afterDayMarked {
+            recordMarkInterstitialShownToday()
+        }
         Task { await ensureLoaded() }
     }
 
@@ -264,7 +305,7 @@ final class AdMobInterstitialService: NSObject {
     }
     #endif
 
-    private func canShowUnderFrequencyCap() -> Bool {
+    private func canShowUnderFrequencyCap(placement: String) -> Bool {
         if sessionCount >= maxPerSession { return false }
 
         let defaults = UserDefaults.standard
@@ -274,12 +315,39 @@ final class AdMobInterstitialService: NSObject {
             if defaults.integer(forKey: dailyCountKey) >= maxPerDay { return false }
         }
 
+        if placement == AdMobConfiguration.Placement.afterDayMarked,
+           markInterstitialsRemainingToday() == false {
+            return false
+        }
+
         if let lastShown = defaults.object(forKey: lastShownKey) as? Date,
            Date().timeIntervalSince(lastShown) < minIntervalBetweenAds {
             return false
         }
 
         return true
+    }
+
+    private func markInterstitialsRemainingToday() -> Bool {
+        let defaults = UserDefaults.standard
+        let today = Calendar.current.startOfDay(for: Date())
+        if let storedDay = defaults.object(forKey: markDailyCountDateKey) as? Date,
+           Calendar.current.isDate(storedDay, inSameDayAs: today) {
+            return defaults.integer(forKey: markDailyCountKey) < maxMarkInterstitialsPerDay
+        }
+        return true
+    }
+
+    private func recordMarkInterstitialShownToday() {
+        let defaults = UserDefaults.standard
+        let today = Calendar.current.startOfDay(for: Date())
+        if let storedDay = defaults.object(forKey: markDailyCountDateKey) as? Date,
+           Calendar.current.isDate(storedDay, inSameDayAs: today) {
+            defaults.set(defaults.integer(forKey: markDailyCountKey) + 1, forKey: markDailyCountKey)
+        } else {
+            defaults.set(today, forKey: markDailyCountDateKey)
+            defaults.set(1, forKey: markDailyCountKey)
+        }
     }
 
     private func recordShown() {

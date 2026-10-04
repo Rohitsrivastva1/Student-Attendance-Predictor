@@ -46,8 +46,9 @@ enum NotificationPersonalization {
     }
 
     private static func personalizeTitle(_ title: String, first: String) -> String {
-        if title.contains(":") {
-            return "\(first) — \(title)"
+        // Templates already carry {name_*} when a greeting helps; don't force a name onto info-first titles.
+        if title.contains(":") || title.contains("·") || title.contains("%") {
+            return title
         }
         if title.hasSuffix("?") {
             return "\(first), \(lowercaseFirst(title.dropLast()))?"
@@ -57,7 +58,7 @@ enum NotificationPersonalization {
             let core = String(title.dropLast())
             return "\(first), \(lowercaseFirst(core))\(punctuation)"
         }
-        return "\(first), \(lowercaseFirst(title))"
+        return title
     }
 
     private static func personalizeBody(_ body: String, first: String) -> String {
@@ -70,7 +71,7 @@ enum NotificationPersonalization {
         if body.hasPrefix("Ready for") {
             return "\(first), \(lowercaseFirst(body))"
         }
-        return "\(first) — \(body)"
+        return body
     }
 
     private static func containsName(_ text: String, _ first: String) -> Bool {

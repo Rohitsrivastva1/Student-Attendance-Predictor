@@ -456,6 +456,14 @@ final class SubjectStore: ObservableObject {
         subjects.first(where: { $0.id == selectedSubjectID })
     }
 
+    var lockedSubjectCount: Int {
+        subjects.filter { isSubjectLocked($0.id) }.count
+    }
+
+    func isSubjectLocked(_ id: UUID) -> Bool {
+        AdEntitlementsStore.shared.isSubjectLocked(id: id, subjects: subjects)
+    }
+
     private let defaults: UserDefaults
     private let context: NSManagedObjectContext
     private var cancellables = Set<AnyCancellable>()
@@ -496,6 +504,9 @@ final class SubjectStore: ObservableObject {
     func performDeferredLaunchTasks() {
         applyMarketDefaultAttendanceIfNeeded()
         SemesterSettings.ensureDefaultDatesIfNeeded()
+        AppStoreReviewPromptCoordinator.shared.backfillIfNeeded(
+            nonHolidayMarkCount: nonHolidayAttendanceMarkCount()
+        )
         Task(priority: .utility) { @MainActor in
             if subjects.isEmpty == false {
                 NotificationService.requestAuthorizationIfNeeded()
@@ -824,6 +835,7 @@ final class SubjectStore: ObservableObject {
             hasSubjects: subjects.isEmpty == false,
             pendingMarkCount: subjectsForMarkToday(on: Date()).count
         )
+        commitNotificationPercentSnapshot(from: context)
     }
 
     func makeNotificationContext(focus: SubjectSummary? = nil) -> NotificationContext {
@@ -855,12 +867,23 @@ final class SubjectStore: ObservableObject {
 
         let hasData = (subject?.totalClasses ?? 0) > 0
         let firstName = NotificationPersonalization.firstName(defaults: defaults)
+        let percent = subject?.currentPercentage ?? 0
+        let subjectKey = subject?.id.uuidString ?? "none"
+        let snapshotKey = "notif.lastKnownPercent.\(subjectKey)"
+        let previousPercent = defaults.object(forKey: snapshotKey) as? Double
+        let moved: Bool
+        if let previous = previousPercent, hasData {
+            moved = abs(previous - percent) >= 1.0
+        } else {
+            moved = false
+        }
+
         return NotificationContext(
-            attendancePercentage: subject?.currentPercentage ?? 0,
+            attendancePercentage: percent,
             requiredPercentage: subject?.requiredPercentage ?? calculator.defaultRequiredPercentage,
             safeBunks: subject?.status == .safe ? (subject?.bunkAllowed ?? 0) : 0,
             recoveryNeeded: subject?.status == .risk ? (subject?.recoveryNeeded ?? 0) : 0,
-            subjectName: subject?.name ?? "Bunk Planner",
+            subjectName: subject?.name ?? "your class",
             firstName: firstName,
             skipVerb: market.skipVerb,
             skipNoun: market.skipNounPlural,
@@ -876,8 +899,16 @@ final class SubjectStore: ObservableObject {
             weeklyAttended: summary.attendedClasses,
             atRiskSubjects: dashboardSummary.riskSubjects,
             dayKey: NotificationCooldownStore.dayKey(today, calendar: calendar),
-            classesByWeekday: classesByWeekday
+            classesByWeekday: classesByWeekday,
+            attendanceMovedRecently: moved || trend != .stable
         )
+    }
+
+    /// Call after habit notifications are scheduled so “moved” curiosity stays true for that pass.
+    func commitNotificationPercentSnapshot(from context: NotificationContext) {
+        guard context.hasData else { return }
+        let subjectKey = selectedSubject?.id.uuidString ?? "none"
+        defaults.set(context.attendancePercentage, forKey: "notif.lastKnownPercent.\(subjectKey)")
     }
 
     /// The saved log entry for a subject on a specific day, if any.
@@ -927,6 +958,7 @@ final class SubjectStore: ObservableObject {
         isHoliday: Bool,
         source: String = "unknown"
     ) {
+        guard isSubjectLocked(subjectID) == false else { return }
         let day = Calendar.current.startOfDay(for: date)
 
         let subjectRequest = SubjectEntity.fetchRequest()
@@ -938,6 +970,7 @@ final class SubjectStore: ObservableObject {
         let boundedAttended = min(max(0, attendedCount), boundedScheduled)
 
         let record = fetchRecordEntity(subjectID: subjectID, day: day)
+        let isNewEntry = record == nil
         let previousEntry = record.map(logEntry(from:))
 
         if let record {
@@ -994,16 +1027,25 @@ final class SubjectStore: ObservableObject {
         AnalyticsUserProfile.recordDayMarked(source: source)
         AnalyticsUserProfile.sync(subjectStore: self)
 
-        if isHoliday == false, boundedAttended > 0 {
-            AppStoreReviewPromptCoordinator.shared.notePositiveMoment()
+        if isHoliday == false {
+            let countsAsNewMark = isNewEntry || previousEntry?.isHoliday == true
+            AppStoreReviewPromptCoordinator.shared.recordAttendanceMark(isNewEntry: countsAsNewMark)
+            if countsAsNewMark,
+               source == "mark_today" || source.hasPrefix("mark_today") {
+                AdMobInterstitialService.shared.recordAttendanceMarkAndMaybeShow()
+            }
         }
 
         SoftPaywallCoordinator.shared.recordAtRiskWeekIfNeeded(
             isAtRisk: dashboardSummary.riskSubjects > 0
         )
-        if source == "mark_today" {
+        if source == "mark_today" || source.hasPrefix("mark_today") {
             SoftPaywallCoordinator.shared.evaluateAfterDayMarked(
                 streak: attendanceStreakDays()
+            )
+            SoftPaywallCoordinator.shared.evaluateHabitValuePaywall(
+                daysSinceInstall: AnalyticsService.shared.daysSinceInstall,
+                hasMarkedDay: true
             )
         }
         SchoolabeSyncService.shared.scheduleSync(subjectStore: self)
@@ -1011,6 +1053,7 @@ final class SubjectStore: ObservableObject {
 
     /// Removes a day's mark and reverses its contribution to the counters.
     func clearDay(subjectID: UUID, date: Date, source: String = "unknown") {
+        guard isSubjectLocked(subjectID) == false else { return }
         let day = Calendar.current.startOfDay(for: date)
         guard let record = fetchRecordEntity(subjectID: subjectID, day: day) else { return }
 
@@ -1056,6 +1099,12 @@ final class SubjectStore: ObservableObject {
             requiredPercentage: subjectEntity.requiredPercentage
         )
         publishWidgetSnapshot()
+    }
+
+    private func nonHolidayAttendanceMarkCount() -> Int {
+        let request = AttendanceRecordEntity.fetchRequest()
+        request.predicate = NSPredicate(format: "isHoliday == NO")
+        return (try? context.count(for: request)) ?? 0
     }
 
     private func fetchRecordEntity(subjectID: UUID, day: Date) -> AttendanceRecordEntity? {
@@ -1465,7 +1514,76 @@ final class SubjectStore: ObservableObject {
         }
     }
 
-    private func screenshotSchedule(
+    /// ASO / Simulator: one below-the-line subject with a clear attend-needed number.
+    func fillASORecoveryScreenshot() {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+
+        if let records = try? context.fetch(AttendanceRecordEntity.fetchRequest()) {
+            records.forEach(context.delete)
+        }
+        if let existing = try? context.fetch(SubjectEntity.fetchRequest()) {
+            existing.forEach(context.delete)
+        }
+        saveContext()
+
+        let id = UUID()
+        let entity = SubjectEntity(context: context)
+        entity.id = id
+        entity.name = "Operating Systems"
+        entity.requiredPercentage = 75
+        entity.scheduleData = Self.encodeSchedule(
+            screenshotSchedule(monday: [9, 10], wednesday: [9], friday: [10], saturday: [9])
+        )
+        entity.createdAt = calendar.date(byAdding: .day, value: -40, to: today) ?? today
+        entity.updatedAt = Date()
+
+        // 12/20 = 60% → clearly below 75%; recoveryNeeded is several classes.
+        let attended = 12
+        let total = 20
+        entity.attendedClasses = Int32(attended)
+        entity.totalClasses = Int32(total)
+
+        var trend: [AttendanceTrendPoint] = []
+        for offset in stride(from: 18, through: 0, by: -2) {
+            guard let day = calendar.date(byAdding: .day, value: -offset, to: today) else { continue }
+            let a = max(1, attended - offset / 3)
+            let tot = max(a, total - offset / 2)
+            trend.append(
+                AttendanceTrendPoint(
+                    timestamp: day,
+                    percentage: CalculationService.currentPercentage(attended: a, total: tot)
+                )
+            )
+        }
+        AttendanceTrendStore.replace(subjectID: id, points: trend)
+
+        saveContext()
+        reloadSubjects()
+        selectedSubjectID = id
+        loadSelectedSubjectIntoCalculator()
+        publishWidgetSnapshot()
+
+        UserDefaults.standard.set(true, forKey: "onboarding.didComplete")
+        UserDefaults.standard.set(true, forKey: "analytics.didLogFirstMark")
+        UserDefaults.standard.set(Date().addingTimeInterval(7 * 24 * 60 * 60), forKey: "review.v2.snoozeUntil")
+        UserDefaults.standard.set(Date(), forKey: "paywall.lastShownAt")
+        GuidedSetupStore.shared.markCompleteSilently()
+
+        if StudentProfileStore.shared.profile.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            StudentProfileStore.shared.save(
+                StudentProfile(
+                    name: "Aarav",
+                    age: 19,
+                    classOrDegree: "UG 2nd year",
+                    institutionName: "NIT"
+                ),
+                skipped: false
+            )
+        }
+    }
+
+        private func screenshotSchedule(
         monday: [Int] = [],
         tuesday: [Int] = [],
         wednesday: [Int] = [],

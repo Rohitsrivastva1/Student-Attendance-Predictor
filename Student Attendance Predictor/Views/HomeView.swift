@@ -40,6 +40,10 @@ struct HomeView: View {
     @ObservedObject private var softPaywall = SoftPaywallCoordinator.shared
     @StateObject private var gpaStore = GPAStore()
     @StateObject private var deadlineStore = DeadlineStore()
+    @ObservedObject private var studyTasks = StudyTaskStore.shared
+    @State private var showTaskCapture = false
+    @State private var showTaskList = false
+    @State private var editingHomeTask: StudyTask?
     @State private var isShowingProPaywall = false
     @State private var proPaywallSource = "forecast"
     @State private var isShowingSubjectLimitAlert = false
@@ -55,11 +59,17 @@ struct HomeView: View {
     @State private var showFirstRunSetup = false
     @State private var classDaysSubjectID: UUID?
     @State private var dismissAtRiskSharePrompt = false
+    @State private var dismissStreakInvite = false
     @State private var pendingToolsDeadlines = false
     @ObservedObject private var widgetPrompt = WidgetPromptCoordinator.shared
     @ObservedObject private var guidedSetup = GuidedSetupStore.shared
     @ObservedObject private var notificationRoute = NotificationRouteStore.shared
     @ObservedObject private var reviewPromptCoordinator = AppStoreReviewPromptCoordinator.shared
+    @ObservedObject private var referral = ReferralService.shared
+    @State private var highlightMarkToday = false
+    @State private var homeScrollToken = 0
+
+    @State private var returnTomorrowBanner: String?
 
     private var hasAttendanceData: Bool {
         viewModel.totalClasses > 0
@@ -133,6 +143,7 @@ struct HomeView: View {
                     refreshGuidedSetup()
                     presentFirstRunIfNeeded()
                     presentMissingDaysIfNeeded()
+                    SoftPaywallCoordinator.shared.noteHomeAppeared()
                     SoftPaywallCoordinator.shared.evaluateHabitValuePaywall(
                         daysSinceInstall: AnalyticsService.shared.daysSinceInstall,
                         hasMarkedDay: AnalyticsService.shared.hasMarkedAtLeastOnce
@@ -175,7 +186,7 @@ struct HomeView: View {
                 .onChange(of: notificationRoute.pendingDestination) { _, destination in
                     consumeNotificationRoute(destination)
                 }
-                .onChange(of: entitlements.isPro) { _, _ in
+                .onChange(of: entitlements.hasProFeatures) { _, _ in
                     subjectStore.rescheduleHabitReminders(force: true)
                 }
                 .sheet(
@@ -190,13 +201,16 @@ struct HomeView: View {
                         )
                     }
                 }
+                .sheet(isPresented: $referral.isShowingRedeem) {
+                    RedeemInviteView()
+                }
         }
     }
 
     /// Skip Planner is Pro. Home previously opened the full sheet for free users
     /// ("Plan skips free"), which removed the reason to pay.
     private func presentSkipPlannerOrPaywall(day: Date = Calendar.current.startOfDay(for: Date())) {
-        if entitlements.isPro {
+        if entitlements.hasProFeatures {
             skipPlannerDay = day
             AnalyticsService.shared.log(
                 .skipPlannerViewed(dayCount: subjectStore.subjectsForMarkToday(on: day).count)
@@ -209,11 +223,9 @@ struct HomeView: View {
         }
     }
 
-    /// Don't stack a Tools promo on top of the at-risk Pro card.
+    /// Always show the weekly Tools promo — at-risk free users need Skip Planner most.
     private var shouldShowHomePromoCard: Bool {
-        guard subjectStore.subjects.isEmpty == false else { return false }
-        if entitlements.isPro { return true }
-        return subjectStore.dashboardSummary.riskSubjects == 0
+        subjectStore.subjects.isEmpty == false
     }
 
     private func consumeNotificationRoute(_ destination: NotificationRoute?) {
@@ -223,6 +235,7 @@ struct HomeView: View {
             selectedTab = .home
         case .markToday:
             selectedTab = .home
+            focusMarkTodayFromNotification()
         case .skipPlanner:
             selectedTab = .home
             presentSkipPlannerOrPaywall()
@@ -237,6 +250,18 @@ struct HomeView: View {
         }
         notificationRoute.clear()
         AnalyticsService.shared.log(.notificationDeepLinkOpened(destination: destination.rawValue))
+    }
+
+    /// Scroll + pulse Mark Today so evening / day-2 / day-3 opens land on the habit, not just Home.
+    private func focusMarkTodayFromNotification() {
+        highlightMarkToday = true
+        homeScrollToken += 1
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_400_000_000)
+            withAnimation(.easeOut(duration: 0.35)) {
+                highlightMarkToday = false
+            }
+        }
     }
 
     private var homeRootContent: some View {
@@ -327,9 +352,17 @@ struct HomeView: View {
                 AnalyticsService.shared.log(.postMarkFocusPromptDismissed)
             }
             didAcceptPostMarkFocus = false
+            let dayOrdinal = Calendar.current.ordinality(of: .day, in: .year, for: Date()) ?? 0
+            let dayKey = "\(SoftPaywallCoordinator.currentISOWeekKey()).\(dayOrdinal)"
+            showReturnTomorrowIfNeeded(dayKey: dayKey)
         }) {
             PostMarkFocusSheet(
                 subjectName: focusPromptSubject?.name,
+                onCaptureHomework: {
+                    didAcceptPostMarkFocus = true
+                    showPostMarkFocusPrompt = false
+                    showTaskCapture = true
+                },
                 onStart: { minutes in
                     didAcceptPostMarkFocus = true
                     showPostMarkFocusPrompt = false
@@ -339,10 +372,47 @@ struct HomeView: View {
                     showPostMarkFocusPrompt = false
                 }
             )
-            .presentationDetents([.height(292)])
+            .presentationDetents([.height(348)])
             .presentationDragIndicator(.visible)
             .presentationCornerRadius(24)
             .preferredColorScheme(.dark)
+        }
+        .sheet(isPresented: $showTaskCapture) {
+            StudyTaskCaptureFlow(
+                subjects: subjectStore.subjects,
+                onNeedSubjects: { isShowingSubjects = true },
+                onAdded: { _ in },
+                onStartFocus: {
+                    if let first = StudyTaskStore.shared.pending.first {
+                        FocusTimerService.shared.selectTask(first)
+                    }
+                    showFocusTimerSheet = true
+                }
+            )
+        }
+        .sheet(isPresented: $showTaskList) {
+            NavigationStack {
+                StudyTaskListScreen(
+                    subjects: subjectStore.subjects,
+                    onStartFocus: {
+                        showTaskList = false
+                        if let first = StudyTaskStore.shared.pending.first {
+                            FocusTimerService.shared.selectTask(first)
+                        }
+                        showFocusTimerSheet = true
+                    }
+                )
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("Done") { showTaskList = false }
+                                .foregroundStyle(.white)
+                        }
+                    }
+            }
+            .preferredColorScheme(.dark)
+        }
+        .sheet(item: $editingHomeTask) { task in
+            StudyTaskEditSheet(task: task, subjects: subjectStore.subjects)
         }
         .sheet(isPresented: $showFocusTimerSheet) {
             NavigationStack {
@@ -376,12 +446,60 @@ struct HomeView: View {
         let timer = FocusTimerService.shared
         if let subject = focusPromptSubject {
             timer.tagSubject(id: subject.id, name: subject.name)
+            if let task = studyTasks.tasks(for: subject.id).first {
+                timer.selectTask(task)
+            }
         }
         timer.selectedFocusMinutes = minutes
-        timer.clampToEntitlement(isPro: entitlements.isPro)
         AnalyticsService.shared.log(.postMarkFocusPromptAccepted(minutes: minutes))
         MultiFeatureEngagementStore.record(.focus)
         showFocusTimerSheet = true
+        timer.startOrResume()
+    }
+
+    /// After all of today's subjects are marked: Focus prompt (once/day) + “come back tomorrow” streak nudge.
+    private func presentPostMarkHabitLoop(subject: SubjectSummary?) {
+        let dayOrdinal = Calendar.current.ordinality(of: .day, in: .year, for: Date()) ?? 0
+        let dayKey = "\(SoftPaywallCoordinator.currentISOWeekKey()).\(dayOrdinal)"
+        let focusKey = "prompt.postMarkFocus.\(dayKey)"
+
+        if UserDefaults.standard.bool(forKey: focusKey) == false,
+           softPaywall.pendingSource == nil {
+            UserDefaults.standard.set(true, forKey: focusKey)
+            focusPromptSubject = subject ?? subjectStore.selectedSubject
+            didAcceptPostMarkFocus = false
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 1_800_000_000)
+                guard softPaywall.pendingSource == nil else {
+                    showReturnTomorrowIfNeeded(dayKey: dayKey)
+                    return
+                }
+                showPostMarkFocusPrompt = true
+                AnalyticsService.shared.log(
+                    .postMarkFocusPromptShown(subjectName: focusPromptSubject?.name ?? "")
+                )
+            }
+            return
+        }
+
+        showReturnTomorrowIfNeeded(dayKey: dayKey)
+    }
+
+    private func showReturnTomorrowIfNeeded(dayKey: String) {
+        let streak = AnalyticsService.shared.currentStreakDays
+        let storageKey = "prompt.returnTomorrow.\(dayKey)"
+        guard streak >= 1,
+              UserDefaults.standard.bool(forKey: storageKey) == false else { return }
+        UserDefaults.standard.set(true, forKey: storageKey)
+        returnTomorrowBanner = streak == 1
+            ? "Come back tomorrow — start a streak."
+            : "Come back tomorrow — keep your \(streak)-day streak."
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 5_500_000_000)
+            if returnTomorrowBanner != nil {
+                withAnimation { returnTomorrowBanner = nil }
+            }
+        }
     }
 
     @ViewBuilder
@@ -420,7 +538,7 @@ struct HomeView: View {
     /// Anchored banner — collapses until filled; sits on the dark canvas.
     @ViewBuilder
     private var stickyAdBanner: some View {
-        if todayHeroSubject != nil, entitlements.isPro == false {
+        if entitlements.areBannersHidden == false {
             AdMobBannerCard(
                 placement: AdMobConfiguration.Placement.home,
                 isActive: true
@@ -601,47 +719,101 @@ struct HomeView: View {
 
     private var homeTabContent: some View {
         phoneScrollWithFABInset {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    compactHeaderSection
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        compactHeaderSection
 
-                    if showFirstRunSetup == false, let step = guidedSetup.activeStep {
-                        GuidedSetupBanner(step: step) {
-                            handleGuidedSetupAction(step)
+                        if let reward = referral.rewardBannerText {
+                            referralRewardBanner(reward)
+                        }
+
+                        if let returnLine = returnTomorrowBanner {
+                            returnTomorrowBannerView(returnLine)
+                        }
+
+                        if showFirstRunSetup == false, let step = guidedSetup.activeStep {
+                            GuidedSetupBanner(step: step) {
+                                handleGuidedSetupAction(step)
+                            }
+                        }
+
+                        if subjectStore.subjects.isEmpty {
+                            welcomeEmptyState
+                        } else {
+                            if let subject = todayHeroSubject {
+                                assistantHeroCard(for: subject)
+                            }
+
+                            missingClassDaysCard
+
+                            if subjectStore.lockedSubjectCount > 0 {
+                                lockedExtrasBanner
+                            }
+
+                            MarkTodayCard(
+                                subjectStore: subjectStore,
+                                isHighlighted: highlightMarkToday,
+                                onCelebrated: {
+                                    refreshGuidedSetup()
+                                },
+                                onAllSubjectsMarkedToday: { subject in
+                                    presentPostMarkHabitLoop(subject: subject)
+                                },
+                                onAddSubject: { isShowingSubjects = true },
+                                onSetClassDays: { subjectID in
+                                    classDaysSubjectID = subjectID
+                                }
+                            )
+                            .id("markToday")
+
+                            HomeDueSoonCard(
+                                store: studyTasks,
+                                onOpenAll: { showTaskList = true },
+                                onEdit: { editingHomeTask = $0 }
+                            )
+
+                            HomeExamCoverageCard(store: studyTasks) { exam, topic in
+                                studyTasks.setTopicCovered(
+                                    taskID: exam.id,
+                                    topicID: topic.id,
+                                    covered: true
+                                )
+                            }
+
+                            if let selected = subjectStore.selectedSubject {
+                                HomeSubjectTasksRow(
+                                    subject: selected,
+                                    store: studyTasks,
+                                    onEdit: { editingHomeTask = $0 }
+                                )
+                            }
+
+                            if nearestExamAttendanceWarning != nil {
+                                upcomingExamAttendanceWarning
+                            }
+
+                            streakInviteCard
                         }
                     }
-
-                    if subjectStore.subjects.isEmpty {
-                        welcomeEmptyState
-                    } else {
-                        if let subject = todayHeroSubject {
-                            assistantHeroCard(for: subject)
-                        }
-
-                        missingClassDaysCard
-
-                        MarkTodayCard(
-                            subjectStore: subjectStore,
-                            onCelebrated: {
-                                refreshGuidedSetup()
-                            },
-                            onAllSubjectsMarkedToday: { _ in },
-                            onAddSubject: { isShowingSubjects = true },
-                            onSetClassDays: { subjectID in
-                                classDaysSubjectID = subjectID
-                            }
-                        )
-
-                        if nearestExamAttendanceWarning != nil {
-                            upcomingExamAttendanceWarning
+                    .padding(.horizontal, 20)
+                    .padding(.top, 8)
+                    .padding(.bottom, tabScrollBottomPadding)
+                    .frame(maxWidth: isRegularWidth ? 920 : .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                }
+                .onChange(of: homeScrollToken) { _, _ in
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                        withAnimation(.easeInOut(duration: 0.35)) {
+                            proxy.scrollTo("markToday", anchor: .center)
                         }
                     }
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
-                .padding(.bottom, tabScrollBottomPadding)
-                .frame(maxWidth: isRegularWidth ? 920 : .infinity, alignment: .leading)
-                .frame(maxWidth: .infinity, alignment: .center)
+                .onChange(of: guidedSetup.activeStep) { _, step in
+                    if step == .markToday {
+                        focusMarkTodayFromNotification()
+                    }
+                }
             }
         }
     }
@@ -655,9 +827,7 @@ struct HomeView: View {
                         insightsWeekPulse
                         trendGraphCard
                         skipPlannerWeekCard
-                        if entitlements.isPro {
-                            subjectForecastCard
-                        }
+                        subjectForecastCard
                     }
                 }
                 .padding(.horizontal, 20)
@@ -710,7 +880,7 @@ struct HomeView: View {
                 $0.weeklySchedule.totalPerWeek == 0
             })?.id ?? subjectStore.selectedSubjectID
         case .markToday:
-            break
+            focusMarkTodayFromNotification()
         }
     }
 
@@ -875,6 +1045,23 @@ struct HomeView: View {
                     .font(BrandType.display(28))
                     .foregroundStyle(.white)
                 Spacer(minLength: 8)
+                Button {
+                    triggerLightHaptic()
+                    if subjectStore.subjects.isEmpty {
+                        isShowingSubjects = true
+                    } else {
+                        showTaskCapture = true
+                    }
+                } label: {
+                    Image(systemName: "camera.fill")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 36, height: 36)
+                        .background(Circle().fill(Color.white.opacity(0.1)))
+                }
+                .buttonStyle(PressableButtonStyle())
+                .accessibilityLabel("Add homework from photo")
+
                 Button {
                     triggerLightHaptic()
                     AnalyticsService.shared.log(.settingsOpened)
@@ -1625,85 +1812,7 @@ struct HomeView: View {
 
     @ViewBuilder
     private var subjectForecastCard: some View {
-        if entitlements.isForecastUnlocked {
-            forecastDetailCard
-        } else {
-            lockedForecastCard
-        }
-    }
-
-    private var lockedForecastCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Image(systemName: "lock.fill")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(BrandColor.colorAccentPrimary)
-                Text("SUBJECT FORECAST")
-                    .font(.system(size: 12, weight: .black, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.55))
-                    .tracking(1.1)
-            }
-
-            Text("See where each subject lands by the end of the semester — and which ones may fall below target.")
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.8))
-
-            if let preview = lockedForecastPreviewLine {
-                HStack(spacing: 8) {
-                    Image(systemName: "chart.line.uptrend.xyaxis")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(BrandColor.colorAccentPrimary)
-                    Text(preview)
-                        .font(.system(size: 13, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.92))
-                }
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color.white.opacity(0.08))
-                )
-            }
-
-            Button {
-                triggerLightHaptic()
-                AnalyticsService.shared.log(
-                    .proCtaTapped(surface: "locked_forecast", action: "go_pro")
-                )
-                proPaywallSource = "forecast"
-                isShowingProPaywall = true
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "crown.fill")
-                        .font(.system(size: 13, weight: .bold))
-                    Text("Go Pro · Unlock forecast forever")
-                        .font(.system(size: 14, weight: .bold, design: .rounded))
-                }
-                .foregroundStyle(.black.opacity(0.9))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(
-                    Capsule(style: .continuous)
-                        .fill(BrandColor.premiumGradient)
-                )
-            }
-            .buttonStyle(PressableButtonStyle())
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(Color.white.opacity(0.06))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                )
-        )
-        .onAppear {
-            AnalyticsService.shared.log(.lockedForecastViewed)
-            MultiFeatureEngagementStore.record(.forecast)
-            AnalyticsService.shared.logProCtaShownOnce(surface: "locked_forecast")
-        }
+        forecastDetailCard(isLocked: entitlements.isForecastUnlocked == false)
     }
 
     private var lockedForecastPreviewLine: String? {
@@ -1713,14 +1822,14 @@ struct HomeView: View {
             let pct = Int(worst.currentPercentage.rounded())
             let req = Int(worst.requiredPercentage.rounded())
             if pct < req {
-                return "\(worst.name): \(pct)% now · need \(req)% — Pro shows the path."
+                return "\(worst.name): \(pct)% now · need \(req)%"
             }
             return "\(worst.name): \(pct)% · class avg \(avg)%."
         }
         return "Class average: \(avg)% today."
     }
 
-    private var forecastDetailCard: some View {
+    private func forecastDetailCard(isLocked: Bool) -> some View {
         let forecasts = subjectStore.subjectForecasts(
             weeks: forecastWeeks,
             holidayClassCount: forecastHolidayClasses,
@@ -1743,15 +1852,45 @@ struct HomeView: View {
                     .font(.system(size: 15, weight: .black, design: .rounded))
                     .foregroundStyle(.white)
 
+                if isLocked, let preview = lockedForecastPreviewLine {
+                    Text(preview)
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.75))
+                }
+
                 if forecasts.isEmpty {
                     Text("Add a subject with attendance to see projections.")
                         .font(.system(size: 13, weight: .semibold, design: .rounded))
                         .foregroundStyle(.white.opacity(0.75))
                 } else {
-                    ForEach(forecasts) { item in
-                        forecastAccordionCard(for: item)
-                    }
+                    forecastSubjectList(forecasts: forecasts, isLocked: isLocked)
                 }
+            }
+
+            if isLocked {
+                Button {
+                    triggerLightHaptic()
+                    AnalyticsService.shared.log(
+                        .proCtaTapped(surface: "locked_forecast", action: "go_pro")
+                    )
+                    proPaywallSource = "forecast"
+                    isShowingProPaywall = true
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "crown.fill")
+                            .font(.system(size: 13, weight: .bold))
+                        Text("Unlock the rest of your semester")
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
+                    }
+                    .foregroundStyle(.black.opacity(0.9))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(BrandColor.premiumGradient)
+                    )
+                }
+                .buttonStyle(PressableButtonStyle())
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1765,7 +1904,13 @@ struct HomeView: View {
                 )
         )
         .onAppear {
-            AnalyticsService.shared.log(.forecastViewed)
+            if isLocked {
+                AnalyticsService.shared.log(.lockedForecastViewed)
+                AnalyticsService.shared.logProCtaShownOnce(surface: "locked_forecast")
+            } else {
+                AnalyticsService.shared.log(.forecastViewed)
+            }
+            MultiFeatureEngagementStore.record(.forecast)
             SemesterSettings.ensureDefaultDatesIfNeeded()
             refreshForecastAssumptionsFromSources()
         }
@@ -1950,11 +2095,14 @@ struct HomeView: View {
     private var holidayPresetsSection: some View {
         let presets = HolidayPresets.options(for: studentMarket)
         return VStack(alignment: .leading, spacing: 8) {
-            Text("Holiday presets")
+            Text(HolidayPresets.sectionTitle(for: studentMarket))
                 .font(.system(size: 12, weight: .bold, design: .rounded))
                 .foregroundStyle(.white.opacity(0.5))
+            Text(HolidayPresets.sectionSubtitle(for: studentMarket))
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(.white.opacity(0.4))
             if presets.isEmpty {
-                Text("No presets for your region — use the stepper above.")
+                Text("No regional presets — use the stepper above for your own break.")
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .foregroundStyle(.white.opacity(0.45))
             } else {
@@ -2048,6 +2196,49 @@ struct HomeView: View {
                 .tint(BrandColor.colorAccentPrimary)
         }
         .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private func forecastSubjectList(forecasts: [SubjectForecast], isLocked: Bool) -> some View {
+        let previewID = subjectStore.dashboardSummary.mostAtRiskSubject?.id ?? forecasts.first?.id
+        ForEach(forecasts) { item in
+            if isLocked, item.id != previewID {
+                lockedForecastRow(for: item)
+            } else {
+                forecastAccordionCard(for: item)
+            }
+        }
+    }
+
+    private func lockedForecastRow(for item: SubjectForecast) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.subjectName)
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                Text("Semester landing is Pro")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.45))
+            }
+            Spacer(minLength: 8)
+            Text("••%")
+                .font(.system(size: 22, weight: .black, design: .rounded))
+                .foregroundStyle(.white.opacity(0.28))
+                .blur(radius: 3)
+            Image(systemName: "lock.fill")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(BrandColor.colorPremium)
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.white.opacity(0.04))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                )
+        )
+        .accessibilityLabel("\(item.subjectName), forecast locked")
     }
 
     private func forecastAccordionCard(for item: SubjectForecast) -> some View {
@@ -2264,13 +2455,13 @@ struct HomeView: View {
                         triggerLightHaptic()
                         exportAttendancePDF()
                     } label: {
-                        Label("PDF report", systemImage: entitlements.isPro ? "doc.richtext" : "lock.fill")
+                        Label("PDF report", systemImage: entitlements.hasProFeatures ? "doc.richtext" : "lock.fill")
                     }
                     Button {
                         triggerLightHaptic()
                         exportAttendanceCSV()
                     } label: {
-                        Label("CSV log", systemImage: entitlements.isPro ? "tablecells" : "lock.fill")
+                        Label("CSV log", systemImage: entitlements.hasProFeatures ? "tablecells" : "lock.fill")
                     }
                 } label: {
                     HStack(spacing: 6) {
@@ -2279,7 +2470,7 @@ struct HomeView: View {
                                 .tint(.white)
                                 .scaleEffect(0.8)
                         } else {
-                            Image(systemName: entitlements.isPro ? "square.and.arrow.up" : "lock.fill")
+                            Image(systemName: entitlements.hasProFeatures ? "square.and.arrow.up" : "lock.fill")
                                 .font(.system(size: 11, weight: .bold))
                         }
                         Text("Export")
@@ -2652,7 +2843,7 @@ struct HomeView: View {
 
     private func exportAttendancePDF() {
         AnalyticsService.shared.log(.pdfExportTapped)
-        guard entitlements.isPro else {
+        guard entitlements.hasProFeatures else {
             proPaywallSource = "pdf_export"
             isShowingProPaywall = true
             return
@@ -2683,7 +2874,7 @@ struct HomeView: View {
 
     private func exportAttendanceCSV() {
         AnalyticsService.shared.log(.csvExportTapped)
-        guard entitlements.isPro else {
+        guard entitlements.hasProFeatures else {
             proPaywallSource = "csv_export"
             isShowingProPaywall = true
             return
@@ -2715,41 +2906,56 @@ struct HomeView: View {
     }
 
     private func shareResult(_ result: AttendanceResult) {
-        let message = shareMessage(for: result)
-        #if canImport(UIKit)
-        if let image = generateShareImage(result: result, message: message) {
-            shareItems = [image, message]
-        } else {
+        Task { @MainActor in
+            await referral.ensureInviteCode()
+            let message = shareMessage(for: result)
+            #if canImport(UIKit)
+            if let image = generateShareImage(result: result, message: message) {
+                shareItems = [image, message]
+            } else {
+                shareItems = [message]
+            }
+            #else
             shareItems = [message]
+            #endif
+            isShowingShareSheet = true
+            AnalyticsService.shared.log(.resultShared(status: result.status == .safe ? "safe" : "risk"))
+            if ReferralConfiguration.inviteSystemShareEnabled, referral.inviteCode != nil {
+                AnalyticsService.shared.log(.inviteLinkShared)
+            }
         }
-        #else
-        shareItems = [message]
-        #endif
-        isShowingShareSheet = true
-        AnalyticsService.shared.log(.resultShared(status: result.status == .safe ? "safe" : "risk"))
     }
 
     private func shareStreak(days: Int) {
-        let message = shareStreakMessage(days: days)
-        #if canImport(UIKit)
-        if let image = generateShareStreakImage(days: days, message: message) {
-            shareItems = [image, message]
-        } else {
+        Task { @MainActor in
+            await referral.ensureInviteCode()
+            let message = shareStreakMessage(days: days)
+            #if canImport(UIKit)
+            if let image = generateShareStreakImage(days: days, message: message) {
+                shareItems = [image, message]
+            } else {
+                shareItems = [message]
+            }
+            #else
             shareItems = [message]
+            #endif
+            isShowingShareSheet = true
+            AnalyticsService.shared.log(.streakShared(days: days))
+            if ReferralConfiguration.inviteSystemShareEnabled, referral.inviteCode != nil {
+                AnalyticsService.shared.log(.inviteLinkShared)
+            }
         }
-        #else
-        shareItems = [message]
-        #endif
-        isShowingShareSheet = true
-        AnalyticsService.shared.log(.streakShared(days: days))
     }
 
     private func shareStreakMessage(days: Int) -> String {
-        let cta = "Try Bunk Planner: Attendance Track."
-        if days == 1 {
-            return "I'm on a 1-day attendance streak 🔥\n\(cta)"
+        let headline = days == 1
+            ? "I'm on a 1-day attendance streak 🔥"
+            : "I'm on a \(days)-day attendance streak 🔥"
+        if ReferralConfiguration.inviteSystemShareEnabled,
+           let invite = referral.shareInviteLine() {
+            return "\(headline)\n\(invite)"
         }
-        return "I'm on a \(days)-day attendance streak 🔥\n\(cta)"
+        return "\(headline)\nTry Bunk Planner: Attendance Track."
     }
 
     #if canImport(UIKit)
@@ -2774,15 +2980,22 @@ struct HomeView: View {
     }
 
     private func shareMessage(for result: AttendanceResult) -> String {
-        let cta = "Try Bunk Planner: Attendance Track."
         let verb = studentMarket.skipVerb
+        let headline: String
         if result.status == .safe {
             if result.bunkAllowed > 0 {
-                return "I can \(verb) \(result.bunkAllowed) classes safely 😎\n\(cta)"
+                headline = "I can \(verb) \(result.bunkAllowed) classes safely 😎"
+            } else {
+                headline = "I'm exactly on the safe attendance line ⚖️"
             }
-            return "I'm exactly on the safe attendance line ⚖️\n\(cta)"
+        } else {
+            headline = "I'm in recovery mode: need to attend \(result.recoveryNeeded) classes 💪"
         }
-        return "I'm in recovery mode: need to attend \(result.recoveryNeeded) classes 💪\n\(cta)"
+        if ReferralConfiguration.inviteSystemShareEnabled,
+           let invite = referral.shareInviteLine() {
+            return "\(headline)\n\(invite)"
+        }
+        return "\(headline)\nTry Bunk Planner: Attendance Track."
     }
 
     #if canImport(UIKit)
@@ -2795,18 +3008,100 @@ struct HomeView: View {
     #endif
 
     private func shareSnapshotCard(result: AttendanceResult, message: String) -> some View {
-        return ZStack {
-            shareBackground(for: result)
+        let palette = sharePalette(for: result)
+        let heroNumber: String
+        let heroLabel: String
+        if result.status == .safe {
+            heroNumber = "\(max(result.bunkAllowed, 0))"
+            heroLabel = result.bunkAllowed == 1
+                ? "SAFE \(studentMarket.skipVerb.uppercased())"
+                : "SAFE \(studentMarket.skipNounPluralTitle.uppercased())"
+        } else {
+            heroNumber = "\(max(result.recoveryNeeded, 1))"
+            heroLabel = "CLASSES TO RECOVER"
+        }
 
-            VStack(alignment: .leading, spacing: 30) {
-                shareHeader(for: result)
-                shareHero(for: result)
-                shareStatsGrid(for: result)
-                shareFooter(message: message)
+        return ZStack {
+            shareBackground(palette: palette)
+
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("BUNK PLANNER")
+                            .font(.system(size: 22, weight: .black, design: .rounded))
+                            .foregroundStyle(.white)
+                            .tracking(2.4)
+                        Text(subjectStore.selectedSubjectName.uppercased())
+                            .font(.system(size: 18, weight: .bold, design: .rounded))
+                            .foregroundStyle(palette.accent)
+                            .tracking(1.6)
+                    }
+                    Spacer()
+                    Text(result.status == .safe ? "SAFE" : "RECOVER")
+                        .font(.system(size: 16, weight: .black, design: .rounded))
+                        .foregroundStyle(Color.black.opacity(0.82))
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 10)
+                        .background(Capsule().fill(palette.accent))
+                }
+
+                Spacer()
+
+                Text(heroNumber)
+                    .font(.system(size: 280, weight: .black, design: .rounded))
+                    .foregroundStyle(palette.accent)
+                    .minimumScaleFactor(0.5)
+                    .lineLimit(1)
+                    .offset(x: -12)
+
+                Text(heroLabel)
+                    .font(.system(size: 36, weight: .black, design: .rounded))
+                    .foregroundStyle(.white)
+                    .tracking(2)
+                    .padding(.bottom, 28)
+
+                Text(shareHeadline(for: result))
+                    .font(.system(size: 36, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, 36)
+
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text(String(format: "%.1f%% now", result.currentPercentage))
+                            .font(.system(size: 26, weight: .black, design: .rounded))
+                            .foregroundStyle(.white)
+                        Spacer()
+                        Text(String(format: "target %.0f%%", viewModel.requiredPercentage))
+                            .font(.system(size: 22, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.55))
+                    }
+                    GeometryReader { geometry in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(.white.opacity(0.1)).frame(height: 16)
+                            Capsule()
+                                .fill(
+                                    LinearGradient(
+                                        colors: [palette.accent, palette.secondaryAccent],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
+                                    )
+                                )
+                                .frame(
+                                    width: geometry.size.width * min(max(result.currentPercentage / 100, 0), 1),
+                                    height: 16
+                                )
+                        }
+                    }
+                    .frame(height: 16)
+                }
+
+                Spacer()
+
+                shareFooter(message: message, palette: palette)
             }
-            .padding(.horizontal, 68)
-            .padding(.vertical, 76)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .padding(.horizontal, 72)
+            .padding(.vertical, 80)
         }
         .frame(width: 1080, height: 1920)
     }
@@ -3010,33 +3305,31 @@ struct HomeView: View {
         }
     }
 
-    private func shareFooter(message: String) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
+    private func shareFooter(message: String, palette: SharePalette) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
             Text(message)
                 .font(.system(size: 24, weight: .bold, design: .rounded))
                 .foregroundStyle(.white.opacity(0.92))
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack {
-                Text("Track. Predict. Share.")
+                Text("Know before you bunk")
                     .font(.system(size: 20, weight: .black, design: .rounded))
-                    .foregroundStyle(.white)
-                    .tracking(0.6)
-
+                    .foregroundStyle(palette.accent)
+                    .tracking(0.4)
                 Spacer()
-
-                Text("@ Bunk Planner")
+                Text("schoolabe.com")
                     .font(.system(size: 18, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.58))
+                    .foregroundStyle(.white.opacity(0.55))
             }
         }
         .padding(32)
         .background(
-            RoundedRectangle(cornerRadius: 34, style: .continuous)
-                .fill(Color.black.opacity(0.18))
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .fill(Color.black.opacity(0.28))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 34, style: .continuous)
-                        .stroke(.white.opacity(0.08), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 28, style: .continuous)
+                        .stroke(palette.accent.opacity(0.35), lineWidth: 1)
                 )
         )
     }
@@ -3176,7 +3469,7 @@ struct HomeView: View {
                 shareStreakHeader(days: days, palette: palette)
                 shareStreakHero(days: days, palette: palette)
                 shareStreakStatsGrid(days: days, palette: palette)
-                shareFooter(message: message)
+                shareFooter(message: message, palette: palette)
             }
             .padding(.horizontal, 68)
             .padding(.vertical, 76)
@@ -3355,10 +3648,10 @@ struct HomeView: View {
                 subjects: subjectStore.subjects,
                 skipVerb: studentMarket.skipVerb,
                 skipNounPlural: studentMarket.skipNounPlural,
-                isPro: entitlements.isPro
+                isPro: entitlements.hasProFeatures
             ),
             subjects: subjectStore.subjects,
-            isPro: entitlements.isPro,
+            isPro: entitlements.hasProFeatures,
             onSelectSubject: { id in
                 triggerLightHaptic()
                 subjectStore.selectedSubjectID = id
@@ -3400,7 +3693,7 @@ struct HomeView: View {
     private var skipPlannerWeekCard: some View {
         SkipPlannerWeekCard(
             subjects: subjectStore.subjects,
-            isPro: entitlements.isPro,
+            isPro: entitlements.hasProFeatures,
             onUnlock: {
                 AnalyticsService.shared.log(.skipPlannerLocked)
                 AnalyticsService.shared.log(.proCtaTapped(surface: "skip_planner", action: "go_pro"))
@@ -3648,8 +3941,172 @@ struct HomeView: View {
         return isCriticalRisk(result: result) ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill"
     }
 
+    private var lockedExtrasBanner: some View {
+        Button {
+            AnalyticsService.shared.log(.proCtaTapped(surface: "locked_subject", action: "go_pro"))
+            proPaywallSource = "locked_subject"
+            isShowingProPaywall = true
+        } label: {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(BrandColor.colorPremium)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\(subjectStore.lockedSubjectCount) extra \(subjectStore.lockedSubjectCount == 1 ? "subject is" : "subjects are") locked")
+                        .font(.system(size: 15, weight: .black, design: .rounded))
+                        .foregroundStyle(.white)
+                    Text("Your first \(ProPurchaseConfiguration.freeSubjectLimit) stay free. Go Pro to keep marking the rest — nothing was deleted.")
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.65))
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(16)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(BrandColor.colorPremium.opacity(0.12))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(BrandColor.colorPremium.opacity(0.28), lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(PressableButtonStyle())
+        .onAppear {
+            AnalyticsService.shared.logProCtaShownOnce(surface: "locked_subject")
+        }
+    }
+
+    private func referralRewardBanner(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "gift.fill")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(BrandColor.colorAccentPrimary)
+            Text(text)
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white)
+            Spacer(minLength: 8)
+            Button {
+                referral.dismissRewardBanner()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.55))
+            }
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(BrandColor.colorAccentPrimary.opacity(0.12))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(BrandColor.colorAccentPrimary.opacity(0.28), lineWidth: 1)
+                )
+        )
+    }
+
+    private func returnTomorrowBannerView(_ text: String) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: "flame.fill")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(BrandColor.colorPremium)
+            Text(text)
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white)
+            Spacer(minLength: 8)
+            Button {
+                withAnimation { returnTomorrowBanner = nil }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.55))
+            }
+            .accessibilityLabel("Dismiss")
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(BrandColor.colorPremium.opacity(0.12))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(BrandColor.colorPremium.opacity(0.28), lineWidth: 1)
+                )
+        )
+        .transition(.move(edge: .top).combined(with: .opacity))
+    }
+
+    @ViewBuilder
+    private var streakInviteCard: some View {
+        let streak = AnalyticsService.shared.currentStreakDays
+        let dismissKey = "prompt.streakInvite"
+        // Hold Home invite share until redeem reason breakdown is clean in prod.
+        if ReferralConfiguration.inviteSystemShareEnabled,
+           entitlements.isPro == false,
+           streak >= 7,
+           dismissStreakInvite == false,
+           UserDefaults.standard.bool(forKey: dismissKey) == false {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("You’re on a \(streak)-day streak")
+                    .font(.system(size: 15, weight: .black, design: .rounded))
+                    .foregroundStyle(.white)
+                Text("Invite a friend. You both get \(ReferralConfiguration.grantDays) days of all Pro features when they redeem. Ads stay on.")
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.65))
+                HStack(spacing: 10) {
+                    Button {
+                        Task {
+                            await referral.ensureInviteCode()
+                            if let result = viewModel.result {
+                                shareResult(result)
+                            } else if let line = referral.shareInviteLine() {
+                                shareItems = [line]
+                                isShowingShareSheet = true
+                                AnalyticsService.shared.log(.inviteLinkShared)
+                            }
+                        }
+                    } label: {
+                        Text("Invite a friend")
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
+                            .foregroundStyle(.black.opacity(0.9))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .background(Capsule().fill(BrandColor.colorAccentPrimary))
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                    Button {
+                        UserDefaults.standard.set(true, forKey: dismissKey)
+                        dismissStreakInvite = true
+                    } label: {
+                        Text("Not now")
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.7))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                }
+            }
+            .padding(16)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.white.opacity(0.06))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                    )
+            )
+        }
+    }
+
     private var homeRotatingPromoCard: some View {
-        let promo = HomePromoStore.promoForCurrentWeek()
+        let promo: HomePromoKind = {
+            // At-risk free users need Skip Planner more than a rotating export tip.
+            if entitlements.hasProFeatures == false,
+               subjectStore.dashboardSummary.riskSubjects > 0 {
+                return .skipPlanner
+            }
+            return HomePromoStore.promoForCurrentWeek()
+        }()
         return HomePromoCard(
             promo: promo,
             market: studentMarket,
@@ -3771,6 +4228,7 @@ struct HomeView: View {
         switch copy.analytics {
         case "log_morning", "log_evening", "log_today":
             selectedTab = .home
+            focusMarkTodayFromNotification()
         case "start_recovery", "skip_plan":
             presentSkipPlannerOrPaywall()
         case "create_subject":
@@ -3782,6 +4240,7 @@ struct HomeView: View {
                 presentSkipPlannerOrPaywall()
             } else {
                 selectedTab = .home
+                focusMarkTodayFromNotification()
             }
         }
     }
@@ -4218,6 +4677,10 @@ private struct SubjectPickerSheet: View {
                                         .foregroundStyle(.secondary)
                                 }
                                 Spacer()
+                                if subjectStore.isSubjectLocked(subject.id) {
+                                    Image(systemName: "lock.fill")
+                                        .foregroundStyle(BrandColor.colorPremium)
+                                }
                                 if subject.id == subjectStore.selectedSubjectID {
                                     Image(systemName: "checkmark.circle.fill")
                                         .foregroundStyle(BrandColor.colorAttend)
@@ -4322,6 +4785,11 @@ private struct SubjectListView: View {
                                     }
 
                                     Spacer()
+
+                                    if subjectStore.isSubjectLocked(subject.id) {
+                                        Image(systemName: "lock.fill")
+                                            .foregroundStyle(BrandColor.colorPremium)
+                                    }
 
                                     Text("\(Int(subject.currentPercentage.rounded()))%")
                                         .font(.system(size: 14, weight: .bold, design: .rounded))

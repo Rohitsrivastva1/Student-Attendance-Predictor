@@ -46,6 +46,13 @@ enum StudentMarket: String, CaseIterable, Identifiable {
         }
     }
 
+    var skipNounSingular: String {
+        switch self {
+        case .india: return "bunk"
+        default: return "skip"
+        }
+    }
+
     var skipNounPluralTitle: String {
         skipNounPlural.prefix(1).uppercased() + skipNounPlural.dropFirst()
     }

@@ -35,6 +35,21 @@ enum AnalyticsUserProfile {
             forName: "is_pro"
         )
 
+        let review = AppStoreReviewPromptCoordinator.shared
+        let funnel: String
+        if review.hasRated {
+            funnel = "yes"
+        } else if review.attendanceMarkCount >= AppStoreReviewPromptCoordinator.minMarks {
+            funnel = "asking"
+        } else {
+            funnel = "pre_5"
+        }
+        AnalyticsService.shared.setUserProperty(funnel, forName: "review_funnel")
+        AnalyticsService.shared.setUserProperty(
+            "\(min(review.attendanceMarkCount, 99))",
+            forName: "review_mark_count"
+        )
+
         let notifEnabled = notificationsEnabled
             ?? UserDefaults.standard.object(forKey: "feature.notificationsEnabled") as? Bool
             ?? true

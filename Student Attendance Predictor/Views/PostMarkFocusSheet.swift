@@ -2,41 +2,40 @@
 //  PostMarkFocusSheet.swift
 //  Student Attendance Predictor
 //
-//  After Mark Today: a bottom sheet, not a system popover.
+//  After Mark Today: homework camera first, then optional Focus.
 //
 
 import SwiftUI
 
 struct PostMarkFocusSheet: View {
     let subjectName: String?
+    var onCaptureHomework: () -> Void
     var onStart: (Int) -> Void
     var onDismiss: () -> Void
 
     private let cyan = BrandColor.colorAccentPrimary
     private let panel = BrandColor.colorSurface
 
-    private var title: String {
+    private var homeworkLine: String {
         if let subjectName, subjectName.isEmpty == false {
-            return "Focus on \(subjectName)?"
+            return "Any homework from \(subjectName) today?"
         }
-        return "Start a focus session?"
+        return "Any homework from today?"
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 6) {
-                Text(title)
+                Text(homeworkLine)
                     .font(.system(size: 20, weight: .black, design: .rounded))
                     .foregroundStyle(.white)
-                Text("Timer stays in the app and tags this subject.")
+                Text("Photograph the diary or notice. It goes on your task list and into Focus Timer.")
                     .font(.system(size: 14, weight: .medium, design: .rounded))
                     .foregroundStyle(.white.opacity(0.55))
             }
 
-            Button {
-                onStart(25)
-            } label: {
-                Text("Start 25 min")
+            Button(action: onCaptureHomework) {
+                Label("Take a photo", systemImage: "camera.fill")
                     .font(.system(size: 16, weight: .heavy, design: .rounded))
                     .foregroundStyle(BrandColor.colorOnAccent)
                     .frame(maxWidth: .infinity)
@@ -50,11 +49,13 @@ struct PostMarkFocusSheet: View {
 
             HStack(spacing: 10) {
                 Button {
-                    onStart(15)
+                    onStart(25)
                 } label: {
-                    Text("15 min")
+                    Text(subjectName.map { "Focus 25 on \($0)" } ?? "Start 25 min")
                         .font(.system(size: 15, weight: .bold, design: .rounded))
                         .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
                         .background(

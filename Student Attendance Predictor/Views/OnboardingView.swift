@@ -15,6 +15,7 @@ struct OnboardingView: View {
     @State private var age: Int?
     @State private var classOrDegree = ""
     @State private var institutionName = ""
+    @State private var inviteCode = ""
 
     private var market: StudentMarket { StudentMarketStore.current }
 
@@ -55,9 +56,15 @@ struct OnboardingView: View {
                     age: $age,
                     classOrDegree: $classOrDegree,
                     institutionName: $institutionName,
+                    inviteCode: $inviteCode,
                     style: .onboarding,
                     onContinue: finishWithProfile
                 )
+                .onAppear {
+                    if inviteCode.isEmpty, CrockfordBase32.isValid(ReferralService.shared.redeemCodeInput) {
+                        inviteCode = ReferralService.shared.redeemCodeInput
+                    }
+                }
             } else {
                 introPages
             }
@@ -163,13 +170,18 @@ struct OnboardingView: View {
             name: name.trimmingCharacters(in: .whitespacesAndNewlines),
             age: age,
             classOrDegree: classOrDegree.trimmingCharacters(in: .whitespacesAndNewlines),
-            institutionName: institutionName.trimmingCharacters(in: .whitespacesAndNewlines)
+            institutionName: InstitutionNameQuality.normalizedForStorage(institutionName)
         )
         guard profile.isCompleteEnoughToSync else { return }
 
         StudentProfileStore.shared.save(profile, skipped: false)
         AnalyticsService.shared.log(.studentProfileCompleted(skipped: false))
         AnalyticsService.shared.log(.funnelStep(step: "profile_done"))
+        let code = CrockfordBase32.normalize(inviteCode)
+        if CrockfordBase32.isValid(code) {
+            AnalyticsService.shared.log(.inviteRedeemStarted(source: "onboarding"))
+            Task { await ReferralService.shared.redeem(code: code) }
+        }
         finishIntro(via: "profile_continue")
         SchoolabeSyncService.shared.scheduleSync(subjectStore: nil)
     }

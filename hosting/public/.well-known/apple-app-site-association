@@ -1,0 +1,11 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "67ZY8256RN.schoolabe.Student-Attendance-Predictor",
+        "paths": ["/i/*"]
+      }
+    ]
+  }
+}

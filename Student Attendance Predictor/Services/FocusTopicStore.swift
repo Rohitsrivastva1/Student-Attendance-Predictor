@@ -12,12 +12,20 @@ struct FocusTopic: Identifiable, Codable, Equatable {
     let id: UUID
     var name: String
     var subjectID: UUID?
+    var syllabusTopicID: UUID?
     var createdAt: Date
 
-    init(id: UUID = UUID(), name: String, subjectID: UUID? = nil, createdAt: Date = Date()) {
+    init(
+        id: UUID = UUID(),
+        name: String,
+        subjectID: UUID? = nil,
+        syllabusTopicID: UUID? = nil,
+        createdAt: Date = Date()
+    ) {
         self.id = id
         self.name = name
         self.subjectID = subjectID
+        self.syllabusTopicID = syllabusTopicID
         self.createdAt = createdAt
     }
 }
@@ -32,7 +40,7 @@ enum FocusTopicStatsScope: Hashable {
 final class FocusTopicStore: ObservableObject {
     static let shared = FocusTopicStore()
 
-    static let maxTopics = 30
+    static let maxTopics = 40
 
     @Published private(set) var topics: [FocusTopic] = []
     @Published var selectedTopicID: UUID?
@@ -44,6 +52,7 @@ final class FocusTopicStore: ObservableObject {
         static let topics = "focus.topics.v1"
         static let allTime = "focus.topics.allTimeMinutes"
         static let daily = "focus.topics.dailyByTopic"
+        static let selected = "focus.topics.selectedID"
     }
 
     private let defaults = UserDefaults.standard
@@ -51,6 +60,11 @@ final class FocusTopicStore: ObservableObject {
     init() {
         load()
         pruneOldDailyEntries()
+        if let raw = defaults.string(forKey: Keys.selected),
+           let id = UUID(uuidString: raw),
+           topics.contains(where: { $0.id == id }) {
+            selectedTopicID = id
+        }
     }
 
     var selectedTopic: FocusTopic? {
@@ -60,30 +74,51 @@ final class FocusTopicStore: ObservableObject {
 
     func clearSelection() {
         selectedTopicID = nil
+        defaults.removeObject(forKey: Keys.selected)
+    }
+
+    func selectTopic(id: UUID?) {
+        selectedTopicID = id
+        if let id {
+            defaults.set(id.uuidString, forKey: Keys.selected)
+        } else {
+            defaults.removeObject(forKey: Keys.selected)
+        }
     }
 
     func syncSelectionWithSubject(_ subjectID: UUID?) {
         guard let selectedTopicID, let topic = topics.first(where: { $0.id == selectedTopicID }) else { return }
         guard let linked = topic.subjectID else { return }
         if subjectID == nil || linked != subjectID {
-            self.selectedTopicID = nil
+            selectTopic(id: nil)
         }
     }
 
     @discardableResult
-    func addTopic(name: String, subjectID: UUID?) -> FocusTopic? {
+    func addTopic(name: String, subjectID: UUID?, syllabusTopicID: UUID? = nil) -> FocusTopic? {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else { return nil }
         guard topics.count < Self.maxTopics else { return nil }
 
         let normalized = trimmed.prefix(48)
-        if topics.contains(where: { $0.name.caseInsensitiveCompare(String(normalized)) == .orderedSame && $0.subjectID == subjectID }) {
-            return topics.first {
-                $0.name.caseInsensitiveCompare(String(normalized)) == .orderedSame && $0.subjectID == subjectID
+        if let existing = topics.first(where: {
+            $0.name.caseInsensitiveCompare(String(normalized)) == .orderedSame && $0.subjectID == subjectID
+        }) {
+            if syllabusTopicID != nil, existing.syllabusTopicID == nil {
+                if let idx = topics.firstIndex(where: { $0.id == existing.id }) {
+                    topics[idx].syllabusTopicID = syllabusTopicID
+                    persistTopics()
+                    return topics[idx]
+                }
             }
+            return existing
         }
 
-        let topic = FocusTopic(name: String(normalized), subjectID: subjectID)
+        let topic = FocusTopic(
+            name: String(normalized),
+            subjectID: subjectID,
+            syllabusTopicID: syllabusTopicID
+        )
         topics.append(topic)
         topics.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         persistTopics()
@@ -98,7 +133,7 @@ final class FocusTopicStore: ObservableObject {
             dailyByTopic[day]?[id.uuidString] = nil
         }
         if selectedTopicID == id {
-            selectedTopicID = nil
+            selectTopic(id: nil)
         }
         persistTopics()
         persistStats()

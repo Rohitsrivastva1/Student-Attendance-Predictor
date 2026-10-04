@@ -18,7 +18,7 @@ struct PrivacyPolicyView: View {
 
                 section(
                     title: "Cloud sync",
-                    body: "We may sync the profile you enter, plus your subjects and attendance, to Schoolabe. This is linked to a random identifier on this device — not your Apple ID, email, or phone number. Some things stay only on this device, like CGPA and Focus Timer notes."
+                    body: "We may sync the profile you enter, plus your subjects and attendance, to Schoolabe. This is linked to a random identifier on this device — not your Apple ID, email, or phone number. Some things stay only on this device, like CGPA, Focus Timer notes, and your syllabus checklist. If you use Make better with AI on a syllabus, only the text you confirmed is sent to Schoolabe (not the photo)."
                 )
 
                 section(
@@ -49,6 +49,21 @@ struct PrivacyPolicyView: View {
                 section(
                     title: "Ad Privacy & Consent",
                     body: "Where required by law (for example in the EEA/UK), Google’s consent tools may ask about personalized ads and cookies before ads load. You can review or change ad privacy choices later in Bunk Planner Settings when “Ad Privacy Choices” is shown, or through your device privacy settings."
+                )
+
+                section(
+                    title: "Invites",
+                    body: "If you share or redeem an invite, we store your anonymous app id and the invite code on Schoolabe so we can credit both of you with a short ad-free period. We do not collect your name, email, or phone number for invites. You can still use the app without inviting anyone."
+                )
+
+                section(
+                    title: "Syllabus",
+                    body: "You can photograph or type a syllabus. Text is read on this device first. If you tap Make better with AI, only the text you confirmed is sent to Schoolabe so we can structure units and topics with Groq. Syllabus photos stay on your phone. Your checklist and progress stay on this device."
+                )
+
+                section(
+                    title: "Homework and exams",
+                    body: "You can photograph a diary, notice, or datesheet. Text is read on this device first. If we use AI to turn that text into a task list, only the text is sent to Schoolabe. Photos stay on your phone. The task list, reminders, and Focus Timer picks stay on this device."
                 )
 
                 section(

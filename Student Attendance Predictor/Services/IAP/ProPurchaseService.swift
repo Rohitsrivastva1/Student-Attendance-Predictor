@@ -235,7 +235,8 @@ final class ProPurchaseService: ObservableObject {
         UserDefaults.standard.set(Array(logged), forKey: loggedPurchaseIDsKey)
 
         let source = AnalyticsService.shared.lastProPaywallSource
-        AnalyticsService.shared.log(.proPurchaseSucceeded(source: source))
+        let layout = AnalyticsService.shared.lastProPaywallLayout
+        AnalyticsService.shared.log(.proPurchaseSucceeded(source: source, layout: layout))
 
         let value = NSDecimalNumber(decimal: transaction.price ?? 0).doubleValue
         let currency = transaction.currency?.identifier ?? currencyCode ?? "INR"

@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Join Bunk Planner — 7 days ad-free</title>
+  <meta name="description" content="Your friend invited you to Bunk Planner. Install the app and both of you get 7 days ad-free." />
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: ui-rounded, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0A0E16;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      width: min(420px, 100%);
+      background: #1C2433;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 24px;
+      padding: 28px 24px 24px;
+    }
+    h1 { font-size: 28px; margin: 0 0 8px; }
+    p { color: rgba(255,255,255,.72); line-height: 1.45; }
+    .code {
+      font-size: 32px;
+      letter-spacing: .18em;
+      font-weight: 800;
+      background: rgba(58,237,192,.12);
+      color: #3AEDC0;
+      border-radius: 16px;
+      padding: 16px;
+      text-align: center;
+      margin: 20px 0;
+    }
+    a.cta {
+      display: block;
+      text-align: center;
+      background: #3AEDC0;
+      color: #0A1018;
+      font-weight: 800;
+      text-decoration: none;
+      border-radius: 999px;
+      padding: 14px;
+    }
+    button {
+      width: 100%;
+      margin-top: 12px;
+      background: transparent;
+      color: rgba(255,255,255,.8);
+      border: 1px solid rgba(255,255,255,.16);
+      border-radius: 999px;
+      padding: 12px;
+      font-weight: 700;
+    }
+    .hint { font-size: 13px; color: rgba(255,255,255,.5); margin-top: 16px; }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>You’re invited</h1>
+    <p>Install Bunk Planner, then redeem this code. You and your friend both get 7 days ad-free.</p>
+    <div class="code" id="code">------</div>
+    <a class="cta" id="store" href="https://apps.apple.com/app/id6761951427">Get Bunk Planner</a>
+    <button id="copy" type="button">Copy code</button>
+    <p class="hint">Already have the app? Open it — we’ll pick the code up from your clipboard. Or paste it in Settings → Invite friends.</p>
+  </main>
+  <script>
+    const parts = location.pathname.split("/").filter(Boolean);
+    const code = (parts[0] === "i" ? parts[1] : parts[0] || "").toUpperCase();
+    document.getElementById("code").textContent = code || "ASK A FRIEND";
+    const copy = document.getElementById("copy");
+    copy.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(code);
+        copy.textContent = "Copied";
+      } catch (e) {
+        copy.textContent = code;
+      }
+    });
+    if (code) {
+      try { navigator.clipboard.writeText(code); } catch (e) {}
+    }
+  </script>
+</body>
+</html>

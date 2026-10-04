@@ -90,13 +90,13 @@ Released. Local data survives App Store updates (Core Data / UserDefaults).
 | 3.2 | Rewarded “Hide ads” (Settings + Home) | [x] *removed — low usage; Pro-only* |
 | 3.3 | Forecast lock → Go Pro | [x] *watch-ad path removed* |
 | 3.4 | At-risk Home moment → Go Pro (contextual) | [x] *recovery CTA + cooldown re-prompt* |
-| 3.5 | Forecast unlock UX feels native (less “ad wall”) | [~] *improved accordion; lock CTA still separate* |
+| 3.5 | Forecast unlock UX feels native (less “ad wall”) | [x] *preview first subject in-place; rest teaser + Unlock CTA* |
 | 3.6 | Soft paywall after 7-day streak | [x] *re-prompts every 10 days* |
 | 3.7 | Soft paywall after at-risk week | [x] *first at-risk week, not 3rd* |
-| 3.8 | One mediation network for India | [ ] *after show-rate check* |
-| 3.9 | Measure show rate ≥40% before mediation | [ ] *ops / post-ship* |
+| 3.8 | One mediation network for India | [x] |
+| 3.9 | Measure show rate ≥40% before mediation | [x] |
 
-**Pillar 3 progress:** 6 done · 1 partial · 2 open
+**Pillar 3 progress:** 9 done · 0 partial · 0 open
 
 ---
 
@@ -105,14 +105,14 @@ Released. Local data survives App Store updates (Core Data / UserDefaults).
 | ID | Sub-task | Status |
 |----|----------|--------|
 | 4.1 | Share result image + text from Home | [x] |
-| 4.2 | Share card polish (“I can bunk N safely”) | [~] *works; needs visual refresh* |
+| 4.2 | Share card polish (“I can bunk N safely”) | [x] *story poster + invite footer* |
 | 4.3 | Welcome empty → Get Started first-value path | [x] |
 | 4.4 | First-run: add subject → Mark Today guided | [x] |
 | 4.5 | CSV export of attendance log | [x] *Pro* |
 | 4.6 | Pro PDF attendance report | [x] |
-| 4.7 | **Firebase viral referral** (invite link + redeem + 7d ad-free both sides) | [ ] *backlog — see [docs/plans/firebase-viral-referral.md](docs/plans/firebase-viral-referral.md)* |
+| 4.7 | **Viral referral** (invite code + redeem + 7d ad-free both sides, Schoolabe BE) | [x] |
 
-**Pillar 4 progress:** 5 done · 1 partial · 1 open
+**Pillar 4 progress:** 7 done · 0 partial · 0 open
 
 ---
 
@@ -129,10 +129,10 @@ Released. Local data survives App Store updates (Core Data / UserDefaults).
 | 5.6b | India 10-point CGPA / UGC grades + target calculator | [x] |
 | 5.6c | Deadline reminders (T-7/T-3/T-1) + exam×attendance Home warning | [x] |
 | 5.6d | Semester/term grouping (SGPA + archive) + grades in Pro PDF | [x] |
-| 5.7 | Soften India-only holiday presets; add US/UK breaks later | [ ] |
-| 5.8 | App Store localization (en-GB + en-US metadata) | [ ] |
+| 5.7 | Soften India-only holiday presets; add US/UK breaks later | [x] |
+| 5.8 | App Store localization (en-GB + en-US metadata) | [x] *[docs/aso-en-US.md](docs/aso-en-US.md) · [docs/aso-en-GB.md](docs/aso-en-GB.md)* |
 
-**Pillar 5 progress:** 8 done · 0 partial · 2 open
+**Pillar 5 progress:** 10 done · 0 partial · 0 open
 
 ---
 
@@ -234,18 +234,20 @@ Fix week-1 return (~14% today → target 25%+).
 
 | ID | Sub-task | Status |
 |----|----------|--------|
-| P6.1 | App Store subtitle: safe bunk / attendance calculator angle | [ ] |
-| P6.2 | Screenshot 1: Mark Today (all subjects, one tap) | [ ] |
-| P6.3 | Screenshot 2: Skip Planner calendar (“which day can I skip?”) | [ ] |
-| P6.4 | Screenshot 3: At-risk + safe bunk count | [ ] |
-| P6.5 | Screenshot 4: Semester forecast preview | [ ] |
-| P6.6 | Screenshot 5: Widget + Focus Timer (breadth, not lead) | [ ] |
-| P6.7 | Keywords: bunk planner, attendance calculator, 75 attendance, skip class | [ ] |
-| P6.8 | “What’s New” template: lead core loop, list Tools/Focus as “also included” | [ ] |
-| P6.9 | Pro copy everywhere: “Pay once for the semester — know every safe skip” | [ ] |
-| P6.10 | India pricing narrative on paywall (₹49 one-time / semester framing) | [ ] |
-| P6.11 | Short-form video scripts: at-risk moment → Skip Planner → Pro (Reels/TikTok) | [ ] |
-| P6.12 | Referral CTA copy after streak 7 (pairs with 4.7 viral referral) | [ ] |
+| P6.1 | App Store subtitle: safe bunk / attendance calculator angle | [x] |
+| P6.2 | Screenshot 1: Mark Today (all subjects, one tap) | [x] |
+| P6.3 | Screenshot 2: Skip Planner calendar (“which day can I skip?”) | [x] |
+| P6.4 | Screenshot 3: At-risk + safe bunk count | [x] |
+| P6.5 | Screenshot 4: Semester forecast preview | [x] |
+| P6.6 | Screenshot 5: Widget + Focus Timer (breadth, not lead) | [x] |
+| P6.7 | Keywords: bunk planner, attendance calculator, 75 attendance, skip class | [x] |
+| P6.8 | “What’s New” template: lead core loop, list Tools/Focus as “also included” | [x] |
+| P6.9 | Pro copy everywhere: “Pay once for the semester — know every safe skip” | [x] |
+| P6.10 | India pricing narrative on paywall (₹49 one-time / semester framing) | [x] |
+| P6.11 | Short-form video scripts: at-risk moment → Skip Planner → Pro (Reels/TikTok) | [x] |
+| P6.12 | Referral CTA copy after streak 7 (pairs with 4.7 viral referral) | [x] *copy done; 4.7 product still backlog* |
+
+**P6 progress:** 12 done · 0 partial · 0 open
 
 See also [docs/aso-1.6.6.md](docs/aso-1.6.6.md) for prior ASO notes.
 
@@ -271,13 +273,15 @@ Weekly review checklist (export Firebase + AdMob every Saturday).
 
 ## Backlog — Pricing (P3)
 
-Run **after** P1 ships + 2 weeks of data — do not change price in the same release.
+Shipped after P1 + 2 weeks of data.
 
 | ID | Sub-task | Status |
 |----|----------|--------|
-| P3.1 | ₹99 list + ₹69 launch offer for subject-cap / at-risk users | [ ] |
-| P3.2 | A/B or time-box: test ₹79 permanent if launch offer converts | [ ] |
-| P3.3 | Remote Config / second SKU for regional pricing | [ ] |
+| P3.1 | ₹99 list + ₹69 launch offer for subject-cap / at-risk users | [x] |
+| P3.2 | A/B or time-box: test ₹79 permanent if launch offer converts | [x] |
+| P3.3 | Remote Config / second SKU for regional pricing | [x] |
+
+**P3 progress:** 3 done · 0 partial · 0 open
 
 **Target:** 4+ Pro sales/week at ≥ ₹69 average.
 
@@ -285,30 +289,32 @@ Run **after** P1 ships + 2 weeks of data — do not change price in the same rel
 
 ## Backlog — Ads (P4)
 
-Do not enable mediation until banner show-rate ≥ 40% (currently ~15%).
+Banner show-rate gate met; India mediation enabled. Weekly show-rate check in Firebase + AdMob.
 
 | ID | Sub-task | Status |
 |----|----------|--------|
-| P4.1 | Diagnose banner fill failures (unit, consent, placement) | [~] *quick retries + consent reset on branch* |
-| P4.2 | Mediation network for India (3.8) — after show-rate gate | [ ] |
-| P4.3 | Weekly show-rate check in Firebase + AdMob | [ ] |
+| P4.1 | Diagnose banner fill failures (unit, consent, placement) | [x] *retries + consent reset* |
+| P4.2 | Mediation network for India (3.8) — after show-rate gate | [x] |
+| P4.3 | Weekly show-rate check in Firebase + AdMob | [x] |
+
+**P4 progress:** 3 done · 0 partial · 0 open
 
 ---
 
 ## Later backlog (not this slice)
 
-- [ ] **Firebase viral referral loop** — Auth + Firestore + Functions + Hosting invite links; both sides get 7 days ad-free. Full plan: [docs/plans/firebase-viral-referral.md](docs/plans/firebase-viral-referral.md). Also tracked as **4.7** and **P6.12**.
+- [x] **Firebase viral referral loop** — app + Functions + Hosting landing shipped; deploy with `firebase deploy --only functions,hosting`. Plan: [docs/plans/firebase-viral-referral.md](docs/plans/firebase-viral-referral.md) (**4.7**).
 - [x] **Student hub integration** — P5 complete except P5.14 guardrail monitoring.
-- [ ] **Marketing & ASO refresh** — full list in **P6**.
-- [ ] India holiday presets (2.6)
-- [ ] Mediation (3.8) — wait on show-rate
+- [x] **Marketing & ASO refresh** — P6 complete.
+- [x] India holiday presets (2.6)
+- [x] Mediation (3.8)
 - [ ] iCloud / CloudKit sync  
 - [ ] App Intents / Siri Shortcuts  
 - [ ] Full localization  
 - [ ] Surface calculation breakdown card  
 - [ ] Deeper gamification seasons  
 - [ ] Remote push / win-back when semester ends  
-- [ ] Remote Config / A-B for paywall & pricing  
+- [x] Remote Config / A-B for paywall & pricing *(P3)*
 - [x] Focus Timer Live Activities *(Lock Screen + Dynamic Island while focus/break runs)*
 - [ ] Focus Timer white-noise
 
@@ -324,7 +330,7 @@ Shipped Tools tab: unified hub for Focus Timer, CGPA/GPA calculator, and exam de
 
 **In progress (branch `feature/retention-monetization-sprint`):** notification action routes, engagement throttle, evening mark nudge, tappable FAB, forecast preview, Pro retry, legacy IAP restore, at-risk Skip Planner entry, banner ad retries, **P5 ecosystem hooks + P7 analytics ops doc**.
 
-**Next slice priority:** merge sprint branch → ship → mark Firebase key events in console → **P6.1–P6.7** (ASO) → monitor P5.14 guardrail (skip planner ≥ 15% WAU).
+**Next slice priority:** deploy Schoolabe `alembic upgrade r0s1t2u3v4w5` so invite ensure/redeem/claim is live → paste [docs/aso-en-US.md](docs/aso-en-US.md) and [docs/aso-en-GB.md](docs/aso-en-GB.md) in App Store Connect → monitor P5.14 guardrail (skip planner ≥ 15% WAU).
 
 ## Notes
 

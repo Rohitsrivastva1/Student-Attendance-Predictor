@@ -23,6 +23,7 @@ struct MarkTodayCard: View {
     @State private var showCelebration = false
     @State private var celebratePulse = false
     @State private var selectedSubjectID: UUID = UUID()
+    @State private var isShowingProPaywall = false
 
     private let today = Date()
 
@@ -96,10 +97,17 @@ struct MarkTodayCard: View {
                     .stroke(
                         showCelebration
                             ? BrandColor.colorAttend.opacity(0.45)
-                            : BrandColor.colorBorder,
-                        lineWidth: showCelebration ? 1.5 : 1
+                            : (isHighlighted ? accentTint.opacity(0.85) : BrandColor.colorBorder),
+                        lineWidth: showCelebration || isHighlighted ? 2 : 1
                     )
             ))
+            .shadow(
+                color: isHighlighted ? accentTint.opacity(0.35) : .clear,
+                radius: isHighlighted ? 16 : 0,
+                y: 0
+            )
+            .scaleEffect(isHighlighted ? 1.015 : 1)
+            .animation(.spring(response: 0.35, dampingFraction: 0.78), value: isHighlighted)
 
             if showCelebration {
                 CelebrationBurst(isActive: showCelebration)
@@ -117,6 +125,10 @@ struct MarkTodayCard: View {
                 .transition(.move(edge: .top).combined(with: .opacity))
                 .padding(.top, -8)
             }
+        }
+        .sheet(isPresented: $isShowingProPaywall) {
+            ProPaywallView(source: "locked_subject")
+                .preferredColorScheme(.dark)
         }
         .onAppear {
             ensureSelection()
@@ -245,12 +257,17 @@ struct MarkTodayCard: View {
                     subject: subject,
                     scheduledCount: max(1, subjectStore.classesScheduledToday(for: subject.id, on: today)),
                     needsClassDays: subject.weeklySchedule.totalPerWeek == 0,
+                    isLocked: subjectStore.isSubjectLocked(subject.id),
                     entry: subjectStore.logEntry(subjectID: subject.id, date: today),
                     attendedTint: attendedTint,
                     missedTint: missedTint,
                     accentTint: accentTint,
                     onChoice: { choice in
                         apply(choice, for: subject)
+                    },
+                    onUnlockPro: {
+                        AnalyticsService.shared.log(.proCtaTapped(surface: "locked_subject", action: "go_pro"))
+                        isShowingProPaywall = true
                     },
                     onSetClassDays: onSetClassDays.map { callback in
                         { callback(subject.id) }
@@ -280,6 +297,7 @@ struct MarkTodayCard: View {
                 ForEach(subjectsToday) { subject in
                     let isCurrent = subject.id == selectedSubjectID
                     let isMarked = subjectStore.logEntry(subjectID: subject.id, date: today) != nil
+                    let isLocked = subjectStore.isSubjectLocked(subject.id)
                     Button {
                         AttendanceLogHaptics.tap()
                         withAnimation(.easeInOut(duration: 0.22)) {
@@ -287,7 +305,11 @@ struct MarkTodayCard: View {
                         }
                     } label: {
                         HStack(spacing: 5) {
-                            if isMarked {
+                            if isLocked {
+                                Image(systemName: "lock.fill")
+                                    .font(.system(size: 11, weight: .bold))
+                                    .foregroundStyle(isCurrent ? Color.black : BrandColor.colorPremium)
+                            } else if isMarked {
                                 Image(systemName: "checkmark.circle.fill")
                                     .font(.system(size: 11, weight: .bold))
                                     .foregroundStyle(isCurrent ? Color.black : attendedTint)
@@ -336,8 +358,14 @@ struct MarkTodayCard: View {
     }
 
     private func markAllUnmarkedAttended() {
-        let targets = unmarkedSubjects
-        guard targets.isEmpty == false else { return }
+        let targets = unmarkedSubjects.filter { subjectStore.isSubjectLocked($0.id) == false }
+        guard targets.isEmpty == false else {
+            if unmarkedSubjects.contains(where: { subjectStore.isSubjectLocked($0.id) }) {
+                AnalyticsService.shared.logProCtaShownOnce(surface: "locked_subject")
+                isShowingProPaywall = true
+            }
+            return
+        }
         AttendanceLogHaptics.tap()
         for subject in targets {
             apply(.attended, for: subject, celebrate: false, advance: false)
@@ -352,6 +380,11 @@ struct MarkTodayCard: View {
         celebrate: Bool = true,
         advance: Bool = true
     ) {
+        if subjectStore.isSubjectLocked(subject.id) {
+            AnalyticsService.shared.logProCtaShownOnce(surface: "locked_subject")
+            isShowingProPaywall = true
+            return
+        }
         let wasNew = subjectStore.logEntry(subjectID: subject.id, date: today) == nil
         let scheduled = max(1, subjectStore.classesScheduledToday(for: subject.id, on: today))
         if celebrate {
@@ -422,11 +455,13 @@ private struct MarkTodaySubjectRow: View {
     let subject: SubjectSummary
     let scheduledCount: Int
     var needsClassDays: Bool = false
+    var isLocked: Bool = false
     let entry: AttendanceLogEntry?
     let attendedTint: Color
     let missedTint: Color
     let accentTint: Color
     let onChoice: (MarkTodayCard.DayChoice) -> Void
+    var onUnlockPro: (() -> Void)? = nil
     var onSetClassDays: (() -> Void)? = nil
 
     private var current: MarkTodayCard.DayChoice? {
@@ -443,7 +478,11 @@ private struct MarkTodaySubjectRow: View {
                     Text(subject.name)
                         .font(BrandType.display(18))
                         .foregroundStyle(.white)
-                    if needsClassDays, let onSetClassDays {
+                    if isLocked {
+                        Text("Pro ended — unlock to keep marking this paper")
+                            .font(BrandType.body(12))
+                            .foregroundStyle(BrandColor.colorPremium)
+                    } else if needsClassDays, let onSetClassDays {
                         Button(action: onSetClassDays) {
                             Text("Set class days")
                                 .font(BrandType.body(12))
@@ -462,9 +501,31 @@ private struct MarkTodaySubjectRow: View {
             }
 
             HStack(spacing: 8) {
-                choiceButton(.attended, title: "Attend", systemImage: "checkmark", tint: attendedTint)
-                choiceButton(.missed, title: "Missed", systemImage: "xmark", tint: missedTint)
-                choiceButton(.holiday, title: "No class", systemImage: "sun.max.fill", tint: accentTint)
+                if isLocked {
+                    Button {
+                        AnalyticsService.shared.log(.proCtaTapped(surface: "locked_subject", action: "go_pro"))
+                        onUnlockPro?()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "lock.fill")
+                                .font(.system(size: 13, weight: .bold))
+                            Text("Go Pro to mark")
+                                .font(BrandType.title(12))
+                        }
+                        .foregroundStyle(.black.opacity(0.9))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(BrandColor.premiumGradient)
+                        )
+                    }
+                    .buttonStyle(LogPressStyle())
+                } else {
+                    choiceButton(.attended, title: "Attend", systemImage: "checkmark", tint: attendedTint)
+                    choiceButton(.missed, title: "Missed", systemImage: "xmark", tint: missedTint)
+                    choiceButton(.holiday, title: "No class", systemImage: "sun.max.fill", tint: accentTint)
+                }
             }
         }
     }
@@ -515,6 +576,7 @@ struct AttendanceLogView: View {
 
     @State private var visibleMonth = Date()
     @State private var editingDay: Date?
+    @State private var isShowingProPaywall = false
 
     private let calendar = Calendar.current
 
@@ -542,6 +604,9 @@ struct AttendanceLogView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             subjectSelector
+            if let id = subjectID, subjectStore.isSubjectLocked(id) {
+                lockedSubjectBanner
+            }
             monthHeader
             weekdayHeaderRow
             monthGrid
@@ -576,6 +641,36 @@ struct AttendanceLogView: View {
                 .analyticsScreen(.dayEditor)
             }
         }
+        .sheet(isPresented: $isShowingProPaywall) {
+            ProPaywallView(source: "locked_subject")
+                .preferredColorScheme(.dark)
+        }
+    }
+
+    private var lockedSubjectBanner: some View {
+        Button {
+            AnalyticsService.shared.log(.proCtaTapped(surface: "locked_subject", action: "go_pro"))
+            isShowingProPaywall = true
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "lock.fill")
+                    .foregroundStyle(BrandColor.colorPremium)
+                Text("This paper is locked. The first \(ProPurchaseConfiguration.freeSubjectLimit) stay free — Go Pro to keep marking extras.")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 0)
+            }
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(BrandColor.colorPremium.opacity(0.14))
+            )
+        }
+        .buttonStyle(.plain)
+        .onAppear {
+            AnalyticsService.shared.logProCtaShownOnce(surface: "locked_subject")
+        }
     }
 
     private var subjectSelector: some View {
@@ -594,8 +689,14 @@ struct AttendanceLogView: View {
 
             Menu {
                 ForEach(subjectStore.subjects) { subject in
-                    Button(subject.name) {
+                    Button {
                         subjectStore.selectSubject(subject)
+                    } label: {
+                        Label {
+                            Text(subject.name)
+                        } icon: {
+                            Image(systemName: subjectStore.isSubjectLocked(subject.id) ? "lock.fill" : "book")
+                        }
                     }
                 }
             } label: {
@@ -674,7 +775,12 @@ struct AttendanceLogView: View {
             } else {
                 Button {
                     AttendanceLogHaptics.tap()
-                    editingDay = day
+                    if let id = subjectID, subjectStore.isSubjectLocked(id) {
+                        AnalyticsService.shared.logProCtaShownOnce(surface: "locked_subject")
+                        isShowingProPaywall = true
+                    } else {
+                        editingDay = day
+                    }
                 } label: {
                     dayLabel(
                         day: day,
@@ -876,17 +982,24 @@ private struct DayEditorSheet: View {
                 }
 
                 Section("Mark") {
-                    Toggle("Holiday / no class held", isOn: $isHoliday)
+                    if subjectStore.isSubjectLocked(subjectID) {
+                        Text("This subject is over the free limit. Go Pro to edit days.")
+                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Toggle("Holiday / no class held", isOn: $isHoliday)
 
-                    if !isHoliday {
-                        Stepper("Classes that day: \(scheduled)", value: $scheduled, in: 0...12)
-                            .onChange(of: scheduled) { _, newValue in
-                                attended = min(attended, newValue)
-                            }
-                        Stepper("Attended: \(attended) of \(scheduled)", value: $attended, in: 0...max(scheduled, 0))
+                        if !isHoliday {
+                            Stepper("Classes that day: \(scheduled)", value: $scheduled, in: 0...12)
+                                .onChange(of: scheduled) { _, newValue in
+                                    attended = min(attended, newValue)
+                                }
+                            Stepper("Attended: \(attended) of \(scheduled)", value: $attended, in: 0...max(scheduled, 0))
+                        }
                     }
                 }
 
+                if subjectStore.isSubjectLocked(subjectID) == false {
                 Section {
                     Button("Save") {
                         subjectStore.markDay(
@@ -906,6 +1019,7 @@ private struct DayEditorSheet: View {
                             dismiss()
                         }
                     }
+                }
                 }
             }
             .navigationTitle("Edit Day")

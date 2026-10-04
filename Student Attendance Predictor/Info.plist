@@ -4,10 +4,45 @@
 <dict>
 	<key>NSUserTrackingUsageDescription</key>
 	<string>This identifier helps Bunk Planner show more relevant ads and keep the app free. If you choose not to allow tracking, the app still works and ads may be less personalized.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Bunk Planner uses the camera so you can photograph homework, a datesheet, or a syllabus and turn the text into a task list on this device.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Bunk Planner reads photos you choose so it can extract homework or syllabus text on this device.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>schoolabe.bunkplanner.invite</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>bunkplanner</string>
+			</array>
+		</dict>
+	</array>
 	<key>GADApplicationIdentifier</key>
 	<string>ca-app-pub-6782814088719675~7481844312</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>localhost</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+			</dict>
+			<key>127.0.0.1</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+		</dict>
+	</dict>
 	<key>SchoolabeAPIBaseURL</key>
 	<string>https://api.schoolabe.com/api/v1/bunk-planner/sync</string>
 	<key>SKAdNetworkItems</key>

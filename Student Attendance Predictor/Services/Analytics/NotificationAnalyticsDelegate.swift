@@ -30,9 +30,11 @@ final class NotificationAnalyticsDelegate: NSObject, UNUserNotificationCenterDel
         if identifier.hasPrefix("attendance-friday-buffer") { return "friday_buffer" }
         if identifier.hasPrefix("attendance-deadline") { return "recovery_deadline" }
         if identifier.hasPrefix("academic-deadline") { return "academic_deadline" }
+        if identifier.hasPrefix("study-task-") { return "study_task" }
         if identifier.hasPrefix("focus-timer") { return "focus_timer" }
         if identifier == "pro-weekly-digest" { return "weekly_digest" }
         if identifier == "retention-day2-mark" { return "day2_mark" }
+        if identifier == "retention-day3-mark" { return "day3_mark" }
         if identifier == "retention-evening-mark" { return "evening_mark" }
         return "other"
     }
